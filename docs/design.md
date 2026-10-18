@@ -124,7 +124,9 @@ Databricks errors are mapped to short, actionable messages that keep the origina
 | `stdio`                  | One process per agent session; nothing but JSON-RPC on stdout | Inherits the user's credentials                                                                                                                                                      |
 | `http` (Streamable HTTP) | `127.0.0.1:8765`                                              | Host-header validation (DNS rebinding protection); bearer token (`DAK_HTTP_TOKEN`) mandatory when binding to a non-loopback address; never forwards client credentials to Databricks |
 
-HTTP mode is single-identity (the server's own Databricks credential). Multi-user on-behalf-of auth is out of scope for v1.
+HTTP mode is stateless (one MCP server instance per request) and single-identity (the server's own Databricks credential). Multi-user on-behalf-of auth is out of scope for v1.
+
+Databricks services are created lazily on the first tool call, so the server starts (and its log resources work) even when credentials are missing; tool calls then return the authentication error and succeed once the credentials are fixed, without a restart.
 
 ## 5. Configuration
 
