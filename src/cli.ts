@@ -81,13 +81,19 @@ async function runMcp(settings: Settings): Promise<void> {
   const factory = () => createMcpServer({ sql, metadata, logs, repository, version, allowWrites: settings.allowWrites });
 
   let stopTransport: () => Promise<void>;
-  if (settings.transport === "stdio") {
-    const handle = serveStdio(factory);
-    stopTransport = () => handle.close();
-  } else {
-    const http = await startHttpServer({ host: settings.httpHost, port: settings.httpPort, token: settings.httpToken, createServer: factory });
-    process.stderr.write(`dak: MCP server listening on ${http.url}\n`);
-    stopTransport = () => http.close();
+  try {
+    if (settings.transport === "stdio") {
+      const handle = serveStdio(factory);
+      stopTransport = () => handle.close();
+    } else {
+      const http = await startHttpServer({ host: settings.httpHost, port: settings.httpPort, token: settings.httpToken, createServer: factory });
+      process.stderr.write(`dak: MCP server listening on ${http.url}\n`);
+      stopTransport = () => http.close();
+    }
+  } catch (error) {
+    logs.lifecycle.fatal("Transport failed to start", { transport: settings.transport }, error);
+    logs.close();
+    throw error;
   }
   logs.lifecycle.info("Transport ready", { transport: settings.transport, allowWrites: settings.allowWrites });
 
