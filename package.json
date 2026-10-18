@@ -17,7 +17,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\""
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\"",
+    "test:integration": "node --disable-warning=ExperimentalWarning --test \"test/integration/*.it.ts\""
   },
   "dependencies": {
     "@modelcontextprotocol/node": "^2.1.1",
