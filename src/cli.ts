@@ -50,7 +50,8 @@ function memoizeUntilSuccess<T>(load: () => Promise<T>): () => Promise<T> {
 /** Defers every async method call until the real service exists. */
 function lazy<T extends object>(load: () => Promise<T>): T {
   return new Proxy({} as T, {
-    get: (_target, key) => async (...args: unknown[]) => {
+    // `then` must stay undefined or `await proxy` would treat the proxy as a thenable and hang.
+    get: (_target, key) => key === "then" ? undefined : async (...args: unknown[]) => {
       const target = (await load()) as Record<PropertyKey, (...callArgs: unknown[]) => unknown>;
       return target[key]!.apply(target, args);
     },
