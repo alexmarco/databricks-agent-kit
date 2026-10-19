@@ -2,7 +2,7 @@ import { access, lstat, mkdir, readdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { untilAborted } from "../abort.ts";
 import type { FetchLike } from "../auth.ts";
-import { InvalidArgumentError, messageWithoutUrls } from "../errors.ts";
+import { DakError, InvalidArgumentError, messageWithoutUrls } from "../errors.ts";
 import { ExecutionCancelled, type ExecutionScope } from "../execution-scope.ts";
 import type { ExecutionHandle } from "../logging/service.ts";
 import type { ExecuteSqlRequest, ExportChunkLink, ExportResultInfo, StatementLifecycle } from "../statements.ts";
@@ -41,7 +41,7 @@ export interface ExportManager {
   cancel(statementId: string): Promise<boolean>;
   /** Deletes `.part` entries of `dir` modified more than 24 hours before `now`. */
   cleanup(now?: number): Promise<void>;
-  /** Cancels every running export, including its Databricks statement. */
+  /** Cancels every running export, including its Databricks statement, and refuses to start new ones (ADR 0015). */
   close(): Promise<void>;
 }
 
@@ -103,6 +103,8 @@ export function createExportManager(deps: ExportManagerDependencies): ExportMana
   const concurrency = deps.concurrency ?? DEFAULT_CONCURRENCY;
   const sinks = { ...DEFAULT_SINKS, ...deps.sinks };
   const jobs = new Map<string, Job>();
+  let closed = false;
+  const shuttingDown = () => new DakError("SHUTTING_DOWN", "The server is shutting down; the export was not started.");
 
   const snapshot = (job: Job): ExportState => structuredClone(job.state);
 
@@ -239,8 +241,13 @@ export function createExportManager(deps: ExportManagerDependencies): ExportMana
   }
 
   async function start(request: { statement: ExecuteSqlRequest; format: ExportFormat; name?: string }): Promise<ExportState> {
+    if (closed) throw shuttingDown();
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const { statementId } = await deps.statements.submitExport(request.statement, request.format);
+    if (closed) {
+      await deps.statements.cancel(statementId).catch(() => undefined);
+      throw shuttingDown();
+    }
     const id = exportId(request.name, statementId);
     const path = exportPath(dir, id, request.format);
     const running = [...jobs.values()].some((job) => job.state.path === path && !FINAL_STATUSES.has(job.state.status));
@@ -303,6 +310,7 @@ export function createExportManager(deps: ExportManagerDependencies): ExportMana
     cancel,
     cleanup: (now) => cleanupOrphanedParts(dir, now),
     close: async () => {
+      closed = true;
       await Promise.all([...jobs.keys()].map(cancel));
     },
   };

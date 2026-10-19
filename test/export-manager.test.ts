@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fsPromises, { access, mkdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
-import { InvalidArgumentError } from "../src/errors.ts";
+import { DakError, InvalidArgumentError } from "../src/errors.ts";
 import { createExecutionScope } from "../src/execution-scope.ts";
 import { cleanupOrphanedParts, createExportManager, type ExportManagerDependencies } from "../src/export/manager.ts";
 import type { ChunkSink, ExportFormat, ExportState, SinkContext } from "../src/export/types.ts";
@@ -821,6 +821,52 @@ test("close cancels the Databricks statement of every running job", async () => 
     assert.deepEqual(cancels.sort(), ["st-a", "st-b"]);
     assert.equal((await manager.get("st-a"))?.status, "CANCELED");
     assert.equal((await manager.get("st-b"))?.status, "CANCELED");
+  });
+});
+
+test("a closed manager refuses to start an export and submits nothing", async () => {
+  await withLogs("stdio", async ({ logs, dir }) => {
+    const { statements } = fakeStatements({ chunks: 1 });
+    let submissions = 0;
+    const submitExport = statements.submitExport;
+    statements.submitExport = (...args) => {
+      submissions++;
+      return submitExport(...args);
+    };
+    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: fakeSink().factory } }));
+
+    await manager.close();
+    await assert.rejects(manager.start(exportRequest()), (error: unknown) => error instanceof DakError && /shutting down/.test(error.message));
+    assert.equal(submissions, 0);
+  });
+});
+
+test("an export whose submission is still running when the manager closes is cancelled and not started", async () => {
+  await withLogs("stdio", async ({ logs, dir }) => {
+    const { statements, cancels } = fakeStatements({ chunks: 1 });
+    let release: () => void = () => undefined;
+    let submitting: () => void = () => undefined;
+    const submissionStarted = new Promise<void>((resolve) => {
+      submitting = resolve;
+    });
+    statements.submitExport = async () => {
+      submitting();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { statementId: STATEMENT_ID, warehouseId: "wh1" };
+    };
+    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: fakeSink().factory } }));
+
+    const starting = manager.start(exportRequest());
+    const rejected = assert.rejects(starting, (error: unknown) => error instanceof DakError && /shutting down/.test(error.message));
+    await submissionStarted;
+    await manager.close();
+    release();
+    await rejected;
+
+    assert.deepEqual(cancels, [STATEMENT_ID]);
+    assert.equal(await manager.get(STATEMENT_ID), undefined);
   });
 });
 
