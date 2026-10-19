@@ -4,6 +4,7 @@ import fsPromises, { access, mkdir, readFile, rm, utimes, writeFile } from "node
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { InvalidArgumentError } from "../src/errors.ts";
+import { createExecutionScope } from "../src/execution-scope.ts";
 import { cleanupOrphanedParts, createExportManager, type ExportManagerDependencies } from "../src/export/manager.ts";
 import type { ChunkSink, ExportFormat, ExportState, SinkContext } from "../src/export/types.ts";
 import type { LogService } from "../src/logging/service.ts";
@@ -137,7 +138,7 @@ function managerDeps(
 ): ExportManagerDependencies {
   return {
     dir: join(dir, "exports"),
-    logs,
+    scope: createExecutionScope(logs),
     sleep: async () => undefined,
     ...overrides,
   };
@@ -468,6 +469,39 @@ test("a successful export logs start and finish with rows", async () => {
     assert.equal(finished.results[0]?.metadata?.rows, 10);
     assert.equal(finished.results[0]?.metadata?.chunks, 2);
     assert.equal(finished.results.some((entry) => JSON.stringify(entry).includes("storage.example")), false);
+  });
+});
+
+test("the log execution of an export ends completed, failed or cancelled with its job", async () => {
+  await withLogs("stdio", async ({ repository, logs, dir }) => {
+    const statusOf = (id: string) => {
+      logs.flush();
+      return repository.recentExecutions(50).find((execution) => execution.toolName === "export" && execution.executionId === id)?.status;
+    };
+    const exportExecutionIds = () => {
+      logs.flush();
+      return repository.recentExecutions(50).filter((execution) => execution.toolName === "export").map((execution) => execution.executionId);
+    };
+
+    const done = createExportManager(managerDeps(logs, dir, { statements: fakeStatements({ chunks: 1 }).statements, fetch: fakeFetch().fetch, sinks: { csv: fakeSink().factory } }));
+    await done.start(exportRequest());
+    await done.wait(STATEMENT_ID, 1000);
+    const [completedId] = exportExecutionIds();
+    assert.equal(statusOf(completedId!), "completed");
+
+    const failing = createExportManager(managerDeps(logs, dir, { statements: fakeStatements({ chunks: 1, state: "FAILED" }).statements, fetch: fakeFetch().fetch, sinks: { csv: fakeSink().factory } }));
+    await failing.start({ ...exportRequest(), name: "failing" });
+    await failing.wait(STATEMENT_ID, 1000);
+    const failedId = exportExecutionIds().find((id) => id !== completedId);
+    assert.equal(statusOf(failedId!), "failed");
+
+    const hanging = hangingFetch();
+    const cancelling = createExportManager(managerDeps(logs, dir, { statements: fakeStatements({ chunks: 1 }).statements, fetch: hanging.fetch, sinks: { csv: fakeSink().factory } }));
+    await cancelling.start({ ...exportRequest(), name: "cancelling" });
+    await waitFor(() => hanging.calls.length === 1);
+    await cancelling.cancel(STATEMENT_ID);
+    const cancelledId = exportExecutionIds().find((id) => id !== completedId && id !== failedId);
+    assert.equal(statusOf(cancelledId!), "cancelled");
   });
 });
 

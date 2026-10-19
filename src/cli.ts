@@ -94,7 +94,7 @@ async function runMcp(settings: Settings): Promise<void> {
       resolveWarehouse: sql.resolveWarehouse,
       scope,
     });
-    const exports = createExportManager({ statements, fetch: clientDependencies.fetch, dir: settings.exportDir, logs, sleep: clientDependencies.sleep });
+    const exports = createExportManager({ statements, fetch: clientDependencies.fetch, dir: settings.exportDir, scope, sleep: clientDependencies.sleep });
     createdExports = exports;
     return { sql, statements, metadata: createMetadataService(client, statements), exports };
   });
