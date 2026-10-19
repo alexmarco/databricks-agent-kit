@@ -2,14 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
-import { createMcpServer, TOOL_NAMES } from "../src/server.ts";
+import { AuthError } from "../src/errors.ts";
+import { createMcpServer, TOOL_NAMES, type ServerDependencies } from "../src/server.ts";
 import { fakeServices, okResult, withLogs } from "./helpers.ts";
 import type { LogRepository } from "../src/logging/repository.ts";
 import type { LogService } from "../src/logging/service.ts";
 
-async function connect(context: { repository: LogRepository; logs: LogService }) {
-  const services = fakeServices();
-  const server = createMcpServer({ ...services, logs: context.logs, repository: context.repository, version: "0.0.0-test" });
+async function connect(context: { repository: LogRepository; logs: LogService }, overrides: Partial<ServerDependencies> = {}) {
+  const services = fakeServices(context.logs);
+  const server = createMcpServer({ ...services, logs: context.logs, repository: context.repository, version: "0.0.0-test", ...overrides });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   const client = new Client({ name: "test-client", version: "1.0.0" });
@@ -205,11 +206,11 @@ test("a tool call writes exactly one info entry with described arguments and the
   });
 });
 
-test("the read-only check duration reported by the SQL service is logged as checkMs", async () => {
+test("the diagnostics a service annotates during a tool call are logged on its final entry", async () => {
   await withLogs("stdio", async (context) => {
     const connection = await connect(context);
-    (connection.services.sql as unknown as { executeSql: (request: unknown, diagnostics?: { checkMs?: number }) => Promise<unknown> }).executeSql = async (_request, diagnostics) => {
-      if (diagnostics !== undefined) diagnostics.checkMs = 42;
+    (connection.services.statements as unknown as { submit: () => Promise<unknown> }).submit = async () => {
+      connection.services.scope.annotate({ checkMs: 42 });
       return okResult;
     };
     await connection.client.callTool({ name: "execute_sql", arguments: { statement: "SELECT 1" } });
@@ -241,7 +242,7 @@ test("a DakError fails the execution as a warning without stack trace", async ()
 test("an unexpected error fails the execution as an error with its stack trace", async () => {
   await withLogs("stdio", async (context) => {
     const connection = await connect(context);
-    (connection.services.sql as unknown as { executeSql: () => Promise<never> }).executeSql = async () => {
+    (connection.services.statements as unknown as { submit: () => Promise<never> }).submit = async () => {
       throw new Error("driver crashed");
     };
     const result = await connection.client.callTool({ name: "execute_sql", arguments: { statement: "SELECT 1" } });
@@ -260,11 +261,26 @@ test("an unexpected error fails the execution as an error with its stack trace",
   });
 });
 
+test("a result that cannot be serialized fails the execution instead of being logged as a success", async () => {
+  await withLogs("stdio", async (context) => {
+    const connection = await connect(context);
+    (connection.services.statements as unknown as { submit: () => Promise<unknown> }).submit = async () => ({ ...okResult, rows: [[1n]] });
+    const result = await connection.client.callTool({ name: "execute_sql", arguments: { statement: "SELECT 1" } });
+    assert.equal(result.isError, true);
+    const { execution, logs } = toolLogs(context, "execute_sql");
+    assert.equal(execution.status, "failed");
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0]?.level, "error");
+    assert.equal(logs[0]?.metadata?.statement, "SELECT 1");
+    await closeAll(connection);
+  });
+});
+
 test("log resources read from SQLite, including the latest calls, without opening executions", async () => {
   await withLogs("stdio", async (context) => {
     const connection = await connect(context);
     const { client, services } = connection;
-    (services.sql as unknown as { executeSql: () => Promise<never> }).executeSql = async () => {
+    (services.statements as unknown as { submit: () => Promise<never> }).submit = async () => {
       throw new Error("[TABLE_OR_VIEW_NOT_FOUND] missing (SQLSTATE 42P01)");
     };
     await client.callTool({ name: "list_objects", arguments: {} });
@@ -318,7 +334,7 @@ test("an unexpected error while reading a log resource is logged on the lifecycl
     repository.stats = () => {
       throw new Error("disk gone");
     };
-    const server = createMcpServer({ ...fakeServices(), logs: context.logs, repository, version: "0.0.0-test" });
+    const server = createMcpServer({ ...fakeServices(context.logs), logs: context.logs, repository, version: "0.0.0-test" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
     const client = new Client({ name: "test-client", version: "1.0.0" });
@@ -333,5 +349,28 @@ test("an unexpected error while reading a log resource is logged on the lifecycl
     assert.equal(errors[0]?.message, "disk gone");
     assert.match(errors[0]?.stackTrace ?? "", /Error: disk gone/);
     await closeAll({ client, server });
+  });
+});
+
+test("a call whose workspace cannot be created returns the error as one warn entry, and the next call succeeds", async () => {
+  await withLogs("stdio", async (context) => {
+    const { workspace } = fakeServices(context.logs);
+    let failures = 1;
+    const connection = await connect(context, {
+      workspace: async () => {
+        if (failures-- > 0) throw new AuthError("No Databricks credentials found. Run `databricks auth login`");
+        return workspace();
+      },
+    });
+    const failed = await connection.client.callTool({ name: "list_objects", arguments: {} });
+    assert.equal(failed.isError, true);
+    assert.match(text(failed), /databricks auth login/);
+    const { execution, logs } = toolLogs(context, "list_objects");
+    assert.equal(execution.status, "failed");
+    assert.deepEqual(logs.map((entry) => entry.level), ["warn"]);
+
+    const retried = await connection.client.callTool({ name: "list_objects", arguments: {} });
+    assert.equal(retried.isError, undefined);
+    await closeAll(connection);
   });
 });

@@ -1,11 +1,13 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createExecutionScope } from "../src/execution-scope.ts";
 import type { ExportManager } from "../src/export/manager.ts";
 import type { ExportFormat, ExportState } from "../src/export/types.ts";
 import type { MetadataService } from "../src/metadata.ts";
-import type { ExecuteSqlRequest, SqlService, StatementResult } from "../src/sql.ts";
-import { SqlError } from "../src/sql.ts";
+import type { WarehouseSelection } from "../src/warehouses.ts";
+import type { ExecuteSqlRequest, StatementLifecycle, StatementResult } from "../src/statements.ts";
+import { SqlError } from "../src/statements.ts";
 import { openLogRepository, type LogRepository } from "../src/logging/repository.ts";
 import { createLogService, type LogService } from "../src/logging/service.ts";
 import type { ExecutionTransport } from "../src/logging/repository.ts";
@@ -20,27 +22,30 @@ export const okResult: StatementResult = {
   truncated: false,
 };
 
-export function fakeServices() {
+/** Fake services, handed to the server through `workspace`; `scope` is the execution scope of `logs`, which the fakes use to report diagnostics like the real modules. */
+export function fakeServices(logs: LogService) {
+  const scope = createExecutionScope(logs);
   const sqlRequests: ExecuteSqlRequest[] = [];
   const getStatementCalls: Array<{ statementId: string; options: unknown }> = [];
   const cancelledStatements: string[] = [];
-  const sql = {
-    executeSql: async (request: ExecuteSqlRequest) => {
+  const statements = {
+    submit: async (request: ExecuteSqlRequest) => {
       sqlRequests.push(request);
       if (request.statement.startsWith("FAIL")) throw new SqlError("[TABLE_OR_VIEW_NOT_FOUND] missing (SQLSTATE 42P01)");
       return okResult;
     },
-    runQuery: async () => okResult,
-    getStatement: async (statementId: string, options?: unknown) => {
+    get: async (statementId: string, options?: unknown) => {
       getStatementCalls.push({ statementId, options });
       return { ...okResult, statementId };
     },
-    cancelStatement: async (statementId: string) => {
+    cancel: async (statementId: string) => {
       cancelledStatements.push(statementId);
     },
-    resolveWarehouse: async () => "wh1",
-    listWarehouses: async () => [{ id: "wh1", name: "Serverless", state: "RUNNING", size: "2X-Small", serverless: true, isDefault: true }],
-  } as unknown as SqlService;
+  } as unknown as StatementLifecycle;
+  const warehouses = {
+    resolve: async () => "wh1",
+    list: async () => [{ id: "wh1", name: "Serverless", state: "RUNNING", size: "2X-Small", serverless: true, isDefault: true }],
+  } as unknown as WarehouseSelection;
   const metadata = {
     listObjects: async (request: { catalog?: string; schema?: string }) => {
       if (request.catalog === undefined) return { level: "catalogs", items: [{ name: "main", comment: undefined }], truncated: false };
@@ -62,9 +67,9 @@ export function fakeServices() {
   };
   const exportStates = new Map<string, ExportState>();
   const exports: ExportManager = {
-    start: async (request, diagnostics) => {
+    start: async (request) => {
       exportCalls.start.push(request);
-      if (diagnostics !== undefined) Object.assign(diagnostics, { checkMs: 3, warehouseId: "wh-export" });
+      scope.annotate({ checkMs: 3, warehouseId: "wh-export" });
       const state: ExportState = { id: "export-1", statementId: "st-export", format: request.format, path: `/exports/export-1.${request.format}`, status: "PENDING" };
       exportStates.set(state.statementId, state);
       return structuredClone(state);
@@ -84,7 +89,8 @@ export function fakeServices() {
     cleanup: async () => undefined,
     close: async () => undefined,
   };
-  return { sql, metadata, exports, exportStates, sqlRequests, getStatementCalls, cancelledStatements, exportCalls };
+  const workspace = async () => ({ warehouses, statements, metadata, exports });
+  return { workspace, warehouses, statements, metadata, exports, scope, exportStates, sqlRequests, getStatementCalls, cancelledStatements, exportCalls };
 }
 
 export async function withLogs<T>(transport: ExecutionTransport, run: (context: { repository: LogRepository; logs: LogService; dir: string }) => Promise<T>): Promise<T> {

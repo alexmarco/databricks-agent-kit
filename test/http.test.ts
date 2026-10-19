@@ -24,7 +24,7 @@ const postStatus = async (port: number, headers: Record<string, string>) => (awa
 
 test("serves MCP over Streamable HTTP on loopback", async () => {
   await withLogs("http", async (context) => {
-    const services = fakeServices();
+    const services = fakeServices(context.logs);
     const http = await startHttpServer({
       host: "127.0.0.1",
       port: 0,
@@ -53,7 +53,7 @@ const TOKEN = "0123456789abcdef0123456789abcdef";
 
 test("requires the bearer token when one is configured", async () => {
   await withLogs("http", async (context) => {
-    const services = fakeServices();
+    const services = fakeServices(context.logs);
     const http = await startHttpServer({
       host: "127.0.0.1",
       port: 0,
@@ -72,7 +72,7 @@ test("requires the bearer token when one is configured", async () => {
 
 test("calls onUnauthorized once per rejected request and still answers 401 without echoing the token", async () => {
   await withLogs("http", async (context) => {
-    const services = fakeServices();
+    const services = fakeServices(context.logs);
     let rejections = 0;
     const http = await startHttpServer({
       host: "127.0.0.1",
@@ -105,7 +105,7 @@ test("calls onUnauthorized once per rejected request and still answers 401 witho
 
 test("a throwing onUnauthorized does not change the 401 response", async () => {
   await withLogs("http", async (context) => {
-    const services = fakeServices();
+    const services = fakeServices(context.logs);
     const http = await startHttpServer({
       host: "127.0.0.1",
       port: 0,

@@ -14,5 +14,12 @@ Possible statuses: Proposed, Accepted, Superseded.
 | [0006](0006-minimal-mcp-surface.md)        | Minimal MCP surface of 5 tools                | Accepted |
 | [0007](0007-logging-policy.md)             | Logging policy                                | Accepted |
 | [0008](0008-simplified-read-only-check.md) | Simplified read-only check                    | Accepted |
+| [0009](0009-statement-lifecycle-module.md) | Statement lifecycle module                    | Accepted |
+| [0010](0010-exports-on-the-statement-lifecycle.md) | Exports on the statement lifecycle module | Accepted |
+| [0011](0011-statement-lookup-for-get-statement.md) | Statement lookup for `get_statement` | Accepted |
+| [0012](0012-warehouse-selection-module.md) | Warehouse selection module | Accepted |
+| [0013](0013-execution-scope-module.md) | Execution scope module | Accepted |
+| [0014](0014-workspace-session-module.md) | Workspace session module | Accepted |
+| [0015](0015-review-fixes-for-the-deepened-modules.md) | Review fixes for the deepened modules | Accepted |
 
 Current design: [docs/design.md](../design.md).

@@ -1,21 +1,30 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { DakError } from "./errors.ts";
-import type { ExportManager } from "./export/manager.ts";
+import type { ExecutionScope } from "./execution-scope.ts";
 import { describeArguments } from "./logging/arguments.ts";
 import type { LogRepository } from "./logging/repository.ts";
 import type { LogService } from "./logging/service.ts";
-import type { MetadataService } from "./metadata.ts";
-import type { ExecutionDiagnostics, SqlService } from "./sql.ts";
+import { createStatementLookup } from "./statement-lookup.ts";
+import type { StatementLifecycle } from "./statements.ts";
+import type { Workspace } from "./workspace-session.ts";
 
 /** Names of every tool the server registers. */
 export const TOOL_NAMES = ["list_objects", "describe_table", "search_metadata", "execute_sql", "get_statement"] as const;
 
+/** The part of the statement lifecycle that runs the agent's statements: always under the read-only policy. */
+export type AgentStatements = Pick<StatementLifecycle, "submit" | "get" | "cancel">;
+
 /** Services behind the MCP tools and resources. */
 export interface ServerDependencies {
-  sql: SqlService;
-  metadata: MetadataService;
-  exports: ExportManager;
+  /**
+   * The Databricks modules, from the workspace session (ADR 0014). Each tool call and recorded resource read awaits it inside
+   * its execution, so a failed credential resolution is the single error of that call and the next call tries again.
+   * The tool handlers receive only the statement methods of the agent: not the ones for server-written SQL (ADR 0015).
+   */
+  workspace(): Promise<Pick<Workspace, "warehouses" | "metadata" | "exports"> & { statements: AgentStatements }>;
+  /** Opens the execution of each tool call, recorded resource read and export; the services annotate through it. */
+  scope: ExecutionScope;
   logs: LogService;
   repository: LogRepository;
   version: string;
@@ -50,20 +59,20 @@ function summarize(result: unknown): Record<string, unknown> {
 }
 
 /**
- * Builds the MCP server with its tools and resources. Every tool call is one execution that writes a single entry when
- * it ends: `info` on success, or the `warn`/`error` of `fail`; failures are returned to the agent as `isError` results
+ * Builds the MCP server with its tools and resources. Every tool call runs in the execution scope (ADR 0013), which writes a single entry when
+ * it ends: `info` on success, or the `warn`/`error` of the error class; failures are returned to the agent as `isError` results
  * with an actionable message. Reads of the log resources open no execution, so they do not inflate the statistics they
  * report; an unexpected error while reading them is logged on the lifecycle execution.
  */
 export function createMcpServer(deps: ServerDependencies): McpServer {
-  const { sql, metadata, exports, logs, repository } = deps;
+  const { workspace, scope, logs, repository } = deps;
   const server = new McpServer({ name: "databricks-agent-kit", version: deps.version }, { instructions: INSTRUCTIONS });
 
   function tool<Schema extends z.ZodObject>(
     name: (typeof TOOL_NAMES)[number],
     description: string,
     inputSchema: Schema,
-    run: (args: z.output<Schema>, diagnostics: ExecutionDiagnostics) => Promise<unknown>,
+    run: (args: z.output<Schema>) => Promise<unknown>,
   ) {
     const annotations =
       name === "execute_sql"
@@ -73,21 +82,20 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
           : { readOnlyHint: true };
     // The JSON Schema `$schema` URI tells the agent nothing and costs about 60 characters per tool in every session.
     server.registerTool(name, { description, inputSchema: inputSchema.meta({ $schema: undefined }), annotations }, (async (args: z.output<Schema>) => {
-      const execution = logs.startExecution({ toolName: name });
-      const startedAt = Date.now();
-      const diagnostics: ExecutionDiagnostics = {};
-      const entry = (result?: unknown) => ({ ...describeArguments(args as Record<string, unknown>), durationMs: Date.now() - startedAt, ...summarize(result), ...diagnostics });
-      return logs.run(execution, async () => {
-        try {
-          const result = await run(args, diagnostics);
-          execution.info("Tool call completed", entry(result));
-          execution.complete();
-          return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
-        } catch (error) {
-          execution.fail(error, entry());
-          return { isError: true, content: [{ type: "text" as const, text: errorMessage(error) }] };
-        }
-      });
+      try {
+        // The reply is serialized inside the scope, so a result that cannot be serialized fails the execution.
+        const reply = await scope.run(
+          { toolName: name },
+          async () => {
+            const result = await run(args);
+            return { result, text: JSON.stringify(result) };
+          },
+          { message: "Tool call completed", arguments: describeArguments(args as Record<string, unknown>), summarize: ({ result }) => summarize(result) },
+        );
+        return { content: [{ type: "text" as const, text: reply.text }] };
+      } catch (error) {
+        return { isError: true, content: [{ type: "text" as const, text: errorMessage(error) }] };
+      }
     }) as never);
   }
 
@@ -100,25 +108,17 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     read: (url: URL, variables: Record<string, string | string[]>) => unknown,
   ) {
     const handler = async (url: URL, variables: Record<string, string | string[]> = {}) => {
-      const reply = (payload: unknown) => ({ contents: [{ uri: url.href, mimeType: "application/json", text: JSON.stringify(payload) }] });
+      const reply = (text: string) => ({ contents: [{ uri: url.href, mimeType: "application/json", text }] });
       if (!record) {
         logs.flush();
         try {
-          return reply(await read(url, variables));
+          return reply(JSON.stringify(await read(url, variables)));
         } catch (error) {
           if (!(error instanceof DakError)) logs.lifecycle.error(error instanceof Error ? error.message : String(error), undefined, error);
           throw error;
         }
       }
-      const execution = logs.startExecution({ resourceUri: url.href });
-      try {
-        const payload = await logs.run(execution, async () => read(url, variables));
-        execution.complete();
-        return reply(payload);
-      } catch (error) {
-        execution.fail(error);
-        throw error;
-      }
+      return reply(await scope.run({ resourceUri: url.href }, async () => JSON.stringify(await read(url, variables))));
     };
     const config = { title: name, description, mimeType: "application/json" };
     if (typeof uri === "string") server.registerResource(name, uri, config, (url) => handler(url));
@@ -129,19 +129,19 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     "list_objects",
     "Catalogs; schemas of catalog; tables of catalog and schema. pattern: substring or glob.",
     z.object({ catalog: z.string().optional(), schema: z.string().optional(), pattern: z.string().optional(), limit: z.number().int().min(1).max(500).optional() }),
-    (args) => metadata.listObjects(args),
+    async (args) => (await workspace()).metadata.listObjects(args),
   );
   tool(
     "describe_table",
     "Columns, keys and tags of catalog.schema.table; optional sample and lineage. Sample or lineage problems are reported in notes.",
     z.object({ full_name: z.string(), sample_rows: z.number().int().min(1).max(100).optional(), lineage: z.boolean().optional() }),
-    (args) => metadata.describeTable(args.full_name, { sampleRows: args.sample_rows, lineage: args.lineage }),
+    async (args) => (await workspace()).metadata.describeTable(args.full_name, { sampleRows: args.sample_rows, lineage: args.lineage }),
   );
   tool(
     "search_metadata",
     "Find tables and columns by name or comment.",
     z.object({ query: z.string().min(1), catalog: z.string().optional(), limit: z.number().int().min(1).max(200).optional() }),
-    (args) => metadata.searchMetadata(args),
+    async (args) => (await workspace()).metadata.searchMetadata(args),
   );
   tool(
     "execute_sql",
@@ -155,10 +155,11 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
       warehouse_id: z.string().optional(),
       export: z.object({ format: z.enum(["csv", "parquet", "sqlite"]), name: z.string().max(64).optional() }).optional(),
     }),
-    async (args, diagnostics) => {
+    async (args) => {
+      const { statements, exports } = await workspace();
       const request = { statement: args.statement, parameters: args.parameters, catalog: args.catalog, schema: args.schema, warehouseId: args.warehouse_id };
-      if (args.export === undefined) return sql.executeSql({ ...request, rowLimit: args.row_limit }, diagnostics);
-      const state = await exports.start({ statement: request, format: args.export.format, name: args.export.name }, diagnostics);
+      if (args.export === undefined) return statements.submit({ ...request, rowLimit: args.row_limit });
+      const state = await exports.start({ statement: request, format: args.export.format, name: args.export.name });
       return { statementId: state.statementId, state: "PENDING", export: state };
     },
   );
@@ -167,22 +168,14 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     "Poll or cancel a statement or export of execute_sql.",
     z.object({ statement_id: z.string(), wait_seconds: z.number().int().min(0).max(30).optional(), cancel: z.boolean().optional() }),
     async (args) => {
-      const statementId = args.statement_id;
-      const waitSeconds = args.wait_seconds ?? 0;
-      if (args.cancel === true) {
-        // The export manager cancels the Databricks statement of a running export itself.
-        if ((await exports.get(statementId)) === undefined) await sql.cancelStatement(statementId);
-        else if (!(await exports.cancel(statementId))) return { statementId, cancelled: false, export: await exports.get(statementId) };
-        return { statementId, cancelled: true };
-      }
-      const exported = await exports.get(statementId);
-      if (exported !== undefined) return { statementId, export: waitSeconds > 0 ? await exports.wait(statementId, waitSeconds * 1000) : exported };
-      return sql.getStatement(statementId, { waitSeconds: args.wait_seconds });
+      const { statements, exports } = await workspace();
+      const lookup = createStatementLookup({ statements, exports });
+      return args.cancel === true ? lookup.cancel(args.statement_id) : lookup.get(args.statement_id, { waitSeconds: args.wait_seconds });
     },
   );
 
   resource("warehouses", "resource://databricks/warehouses", "SQL warehouses visible to this identity and the default one.", true, async () => ({
-    warehouses: await sql.listWarehouses(),
+    warehouses: await (await workspace()).warehouses.list(),
   }));
   resource("recent-errors", "resource://logs/errors/recent", "Most recent error and fatal log entries.", false, () => ({
     generatedAt: new Date().toISOString(),

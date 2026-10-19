@@ -101,6 +101,8 @@ The server sends MCP `instructions` and tool descriptions stating that these too
 
 ### 4.3 SQL execution rules
 
+The **statement lifecycle** module (`src/statements.ts`, ADR 0009, terms in [GLOSSARY.md](../GLOSSARY.md)) owns everything below: it builds the request, applies the read-only policy, submits, polls, cancels and shapes the bounded result. Its interface is `submit(request)` (plain statement of the agent, always under the read-only policy), `submitServerSql(request)` (plain statement of server-written SQL, no check), `query(request)` (server-written SQL that must finish), `submitExport(request, format)`, `awaitExport(statementId, signal)`, `exportChunkLink(statementId, index, signal)`, `get(statementId, { rowLimit?, waitSeconds? })` and `cancel(statementId)` (the export methods are in ADR 0010). The read-only policy is implemented once and is chosen by the entry point (ADR 0015): it applies to `submit` and `submitExport` (`execute_sql` and exports); statements the server writes itself (metadata queries through `query`, doctor probes through `submitServerSql`) skip it, and the tool handlers receive only `submit`, `get` and `cancel` (`AgentStatements`). `awaitExport` waits with a sleep that its abort signal releases, so an aborted wait leaves no timer behind. The export manager makes no statement request: it submits, waits, requests chunk links and cancels through this module. The doctor's download check also runs on this module (`submitExport`, `awaitExport`, `exportChunkLink`, `cancel`), so `src/statements.ts` is the only file that builds the statements path. `get_statement` asks the **statement lookup** (`src/statement-lookup.ts`, ADR 0011) about any id: `get(statementId, { waitSeconds? })` and `cancel(statementId)`. An id that the export manager knows is an export (its state, or `cancelled: false` with its state when it already ended); any other id is a plain statement that goes to `get` and `cancel` of this module; the tool handler has one path (the server builds the lookup from the `statements` and `exports` of the workspace on each call, ADR 0014). The **warehouse selection** module (`src/warehouses.ts`, ADR 0012) is a separate responsibility: `resolve(explicit?)` gives the warehouse id (explicit, then configured, then the remembered automatic choice) and `list()` gives the accessible warehouses with the default marked. The lifecycle module receives `resolve` as an injected function and never depends on the module itself.
+
 - **Read-only by default** (ADR 0008). Anything that is not a plain leading read keyword is analyzed by Databricks itself, so comments, string literals and dialect features need no handling here and nothing is executed:
   1. Statements holding a `;` before their last non-whitespace character are rejected without any call, so the check never submits several statements. Read-only mode cannot tell several statements from a `;` inside a literal; the `Read-only mode` message tells the agent to pass such literals as `:name` parameters. A single trailing `;` is accepted.
   2. Statements starting with `SHOW`, `DESCRIBE`, `DESC` or `EXPLAIN` as a whole word, preceded only by spaces, tabs or line breaks and not followed by a `:` (a SQL-scripting label), are accepted without an extra call. Comments are not skipped, so a statement that starts with a comment goes through `DESCRIBE QUERY`.
@@ -134,20 +136,22 @@ HTTP mode is stateless (one MCP server instance per request) and single-identity
 
 Databricks services are created lazily on the first tool call, so the server starts (and its log resources work) even when credentials are missing; tool calls then return the authentication error and succeed once the credentials are fixed, without a restart.
 
+The **workspace session** module (`src/workspace-session.ts`, ADR 0014) owns this. `createWorkspaceSession(adapters, { warehouseId, limits, logs, exportDir })` returns `workspace()`, `scope` and `close()`. The first `workspace()` call resolves the credentials and builds the client, the warehouse selection (one per session), the statement lifecycle, the metadata service and the export manager, connects their hooks to the log service ("Databricks credentials resolved", token refresh, request retries and requests, "Warehouse chosen automatically") and returns them as one `Workspace`; later calls return the same one, and a failed resolution is not remembered, so the next call tries again. The MCP server awaits `workspace()` inside the execution scope of each tool call and recorded resource read (`ServerDependencies.workspace`), so a missing credential is that call's single error entry and `isError` result. `scope` is the one execution scope shared by the lifecycle, the export manager and the server. `close()` waits for a workspace that is still being built, cancels its running exports and resolves no credentials when no workspace was created; afterwards `workspace()` and the export manager's `start` are refused (ADR 0015), so SIGINT, SIGTERM and the end of stdin flush the logs without touching Databricks. `src/cli.ts` keeps argument parsing, the transport choice, signal handling, the 401 rate limiter and the stop sequence. `dak doctor` uses the same construction through `connectWorkspace(adapters, { warehouseId, limits })`, with its smaller `DOCTOR_LIMITS` (10 rows, 10 000 bytes, writes disabled) and no log service, so its lifecycle has no scope.
+
 ### 4.6 Result export
 
 For results too large for the agent's context (ADR 0003). `execute_sql` accepts `export: { format, name? }` with `format` equal to `csv`, `parquet` or `sqlite`; the response is immediate (`statementId`, `state: PENDING` and the export descriptor) and `get_statement` reports progress. `row_limit` and `DAK_MAX_ROWS` do not apply; the read-only check does.
 
 - The query runs with `disposition=EXTERNAL_LINKS`: `CSV`, `ARROW_STREAM` or `JSON_ARRAY` for the three formats. Databricks splits the result into chunks (about 21 MB each) and returns one presigned URL per chunk, valid for 15 minutes at most.
-- Each export is a background job in its own log execution. It polls the statement (waits of 1 s growing to 10 s, without an upper bound: a statement stuck in `PENDING` or `RUNNING` is polled until Databricks ends it or the job is cancelled), then downloads the chunks and writes them to the format's sink strictly in `chunk_index` order. At most 4 downloads are in flight and no more than 8 chunks are ahead of the one being written, so memory stays bounded.
-- Downloads are plain `GET` requests without an `Authorization` header. The link of the first chunk comes with the result; the others are requested from `.../result/chunks/{n}` just before their download. A network error, `429` or `5xx` is retried up to 3 times with waits of 500, 1000 and 2000 ms; an expired link or a `403` gets one fresh link; any other status fails the export. The first failure aborts the job at once. URLs carry credentials and are never logged.
+- Each export is a background job in its own log execution. It waits for the statement through the statement lifecycle module (`awaitExport`: waits of 1 s growing to 10 s, without an upper bound: a statement stuck in `PENDING` or `RUNNING` is polled until Databricks ends it or the job is cancelled), then downloads the chunks and writes them to the format's sink strictly in `chunk_index` order. At most 4 downloads are in flight and no more than 8 chunks are ahead of the one being written, so memory stays bounded.
+- Downloads are plain `GET` requests without an `Authorization` header. The link of the first chunk comes with the result; the others are requested through the lifecycle module (`exportChunkLink`, the chunk endpoint `.../result/chunks/{n}`) just before their download. A network error, `429` or `5xx` is retried up to 3 times with waits of 500, 1000 and 2000 ms; an expired link or a `403` gets one fresh link; any other status fails the export. The first failure aborts the job at once. URLs carry credentials and are never logged.
 - Files are written only under `DAK_EXPORT_DIR`. The agent can only suggest a `name` (sanitized to `[A-Za-z0-9._-]`, 64 characters); the export id is `<name or "export">-<full statement id>` (the statement id is sanitized to the same characters and not cut, because time-ordered statement ids share their first characters for minutes). The directory is created with mode `0700` outside Windows. If the target path already exists (or an export is running for it), the manager cancels the statement it just submitted and rejects the call. Each output is written as `.part` and renamed when complete.
 - `csv`: one `<id>.csv.part` renamed to `<id>.csv`; chunks are appended as downloaded, in order (only the first one has a header). SQL `NULL` is written by Databricks as the text `null`.
 - `parquet`: `part-NNNNN.parquet` per chunk, converted from the `ARROW_STREAM` chunk with `parquet-wasm` (ZSTD), keeping all types (ADR 0004). The files are written into the directory `<id>.part/`, which is renamed to `<id>` when the last chunk is written; with no chunks the final directory is empty.
 - `sqlite`: `<id>.db.part` renamed to `<id>.db`, with a table `result` loaded from `JSON_ARRAY` chunks with `node:sqlite`, one transaction per chunk. Values are bound as text and converted by column affinity: integers to `INTEGER` (exact for `BIGINT`), `BOOLEAN` to 0/1, floats and `DECIMAL` of up to 15 digits to `REAL`, longer `DECIMAL` and everything else to `TEXT`; `STRUCT`, `ARRAY` and `MAP` are JSON text.
 - States: `PENDING` (query running in Databricks), `DOWNLOADING` with `{ chunksDone, chunksTotal, rows, bytes }`, `SUCCEEDED` with `{ files, rows, bytes, truncated }`, `FAILED` with `error`, `CANCELED`. `get_statement` with `wait_seconds` (0 to 30) waits up to that time for the export to end. With `cancel: true` it aborts the local job (which deletes the partial files) and cancels the statement in Databricks. On shutdown every running export is cancelled.
 - Limits: `DAK_EXPORT_MAX_BYTES` (sent as `byte_limit`; a result cut at the limit ends `SUCCEEDED` with `truncated: true`); jobs live in the process and are not resumed after a restart; finished exports are never deleted; partitioning by column is not offered. At startup `cleanupOrphanedParts` removes `.part` files and directories of the export directory that were last modified more than 24 hours earlier; it needs no credentials, so it does not wait for the first tool call.
-- `dak doctor` checks that a result chunk can be downloaded (a `SELECT 1` export) and that the export directory is writable.
+- `dak doctor` checks that a result chunk can be downloaded (a `SELECT 1` export, submitted and awaited through the statement lifecycle module like a real export, with the wait bounded to 60 s) and that the export directory is writable.
 
 ## 5. Configuration
 
@@ -174,8 +178,10 @@ Implements the logging specification v1.0 provided by the user (persistence, tra
 ### 6.1 Components
 
 ```text
-MCP runtime (tools, resources) -> LogService -> in-memory FIFO queue -> BatchWriter -> SQLite repository -> logs.db
+MCP runtime (tools, resources) -> execution scope -> LogService -> in-memory FIFO queue -> BatchWriter -> SQLite repository -> logs.db
 ```
+
+- **Execution scope (`src/execution-scope.ts`, ADR 0013):** the only place that opens an execution, runs work with it as the current one, writes the single final entry and ends the execution as `completed`, `failed` or `cancelled`. Tool calls, recorded resource reads and background exports run through it; the log service stays a plain writer.
 
 - **SQLite driver:** `node:sqlite` (built into Node.js, no native module) instead of `better-sqlite3`. Node.js flags it as experimental; its startup warning is suppressed and the repository interface isolates the driver if it ever has to change.
 - **Event generation:** small in-house logger (levels, category, source, metadata, stack trace) instead of `pino`. Nothing is ever written to stdout.
@@ -186,7 +192,7 @@ As specified: `Execution` (`executionId`, `startedAt`, `finishedAt?`, `transport
 
 ### 6.3 Flow
 
-- Every tool call opens an execution (`started`), logs its events, and closes it as `completed`, `failed` or `cancelled`. Each export runs as a further execution of its own (tool name `export`), because it outlives the call that started it. Reads of the `resource://logs/*` resources are not recorded, so diagnosing does not inflate the statistics.
+- Every tool call opens an execution (`started`), logs its events, and closes it as `completed`, `failed` or `cancelled`, always through the execution scope (`scope.run`, ADR 0013). Each export runs as a further execution of its own (tool name `export`), because it outlives the call that started it. Reads of the `resource://logs/*` resources are not recorded, so diagnosing does not inflate the statistics.
 - Server-level events (startup, shutdown, purge, transport errors) belong to one **lifecycle execution** per process, because `logs.execution_id` is mandatory.
 - Execution inserts/updates and log entries all go through the same FIFO queue, so a log entry is never written before its execution row.
 - Flush when 100 events are pending or 5 s have passed since the last flush; each flush is one transaction. The queue is also flushed on shutdown (`SIGINT`, `SIGTERM`, stdin end, `beforeExit`) to keep the loss window to an abrupt crash.
@@ -221,7 +227,9 @@ ADR 0007. Structured events, correlation by identifier, levels with meaning, not
 | Export start and end                | `info`                        | Format, rows, chunks, bytes, duration; a failure is `warn` or `error` by the rule above; per-chunk detail only at `debug` |
 | HTTP `401` of the MCP transport     | `warn`, at most once a minute | Counter of suppressed events; never the token or headers                                                                  |
 
-A failed tool call writes exactly one entry: `ExecutionHandle.fail(error, metadata?)` logs the error at the level above with the same arguments, duration and diagnostics that the `info` entry of a successful call carries, so there is never an `info` entry and a failure entry for the same call.
+A failed tool call writes exactly one entry: the execution scope ends the execution with `ExecutionHandle.fail(error, metadata?)`, which logs the error at the level above with the same arguments, duration and diagnostics that the `info` entry of a successful call carries, so there is never an `info` entry and a failure entry for the same call. This holds where it is implemented, in `scope.run`, not by convention in each caller.
+
+**Diagnostics.** `checkMs` (duration of the read-only check) and `warehouseId` (warehouse of an export) are not passed through signatures. The code that knows them calls `scope.annotate(...)`: the statement lifecycle after the check and when it submits an export. `annotate` adds them to the final entry of the current scope, found with `logs.current()` like the "warehouse chosen" event finds its execution; scopes running concurrently keep separate diagnostics and outside a scope `annotate` does nothing. The final status of a scope follows the outcome of its work: it resolves (`completed`), throws `ExecutionCancelled` (`cancelled`, no entry, used by a cancelled export job) or throws anything else (`failed`).
 
 ## 7. Repository layout
 
@@ -230,17 +238,22 @@ databricks-agent-kit/
   package.json            # bin: dak
   tsconfig.json
   src/
-    cli.ts                # argument parsing, command dispatch
+    cli.ts                # argument parsing, transport choice, signals, 401 rate limiter, command dispatch
+    workspace-session.ts  # workspace session: lazy credentials, construction of the Databricks modules, closing (ADR 0014)
     config.ts             # env, profile, options
     auth.ts               # PAT, OAuth M2M, CLI-delegated U2M
     client.ts             # fetch wrapper, retries, error mapping
-    sql.ts                # statement execution, read-only check, result shaping
+    statements.ts         # statement lifecycle: submit, read-only policy, polling, cancel, result shaping (ADR 0009)
+    statement-lookup.ts   # get_statement: one answer for any statement id, export or plain (ADR 0011)
+    execution-scope.ts    # execution scope: open an execution, run work in it, the single final entry and status (ADR 0013)
+    warehouses.ts         # warehouse selection: explicit, configured and automatic choice, listing (ADR 0012)
     metadata.ts           # catalogs, schemas, tables, search, lineage
     export/               # background export jobs: chunk download, csv, parquet, sqlite
     logging/              # log service, queue, batch writer, repository, uuid v7, argument description, rate limiter
     server.ts             # MCP tools, resources, transports
     doctor.ts             # environment checks
   test/                   # node:test
+  GLOSSARY.md             # design vocabulary and the terms of the statement lifecycle module
   docs/design.md
   docs/adr/               # architecture decision records
   README.md

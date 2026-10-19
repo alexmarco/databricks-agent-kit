@@ -1,10 +1,23 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { AuthProvider, FetchLike } from "./auth.ts";
-import type { DatabricksClient } from "./client.ts";
+import type { FetchLike } from "./auth.ts";
 import type { Settings } from "./config.ts";
 import { messageWithoutUrls } from "./errors.ts";
-import { createSqlService, type SqlService } from "./sql.ts";
+import type { StatementLifecycle } from "./statements.ts";
+import type { WarehouseSelection } from "./warehouses.ts";
+import type { WorkspaceConnection, WorkspaceLimits } from "./workspace-session.ts";
+
+/** The part of the statement lifecycle that the doctor uses. */
+export type DoctorStatements = Pick<StatementLifecycle, "submitServerSql" | "submitExport" | "awaitExport" | "exportChunkLink" | "cancel">;
+
+/** The doctor's smaller limits for the workspace session: a probe returns at most 10 rows and nothing writes. */
+export const DOCTOR_LIMITS: WorkspaceLimits = { maxRows: 10, allowWrites: false, maxResultBytes: 10_000 };
+
+/** What the doctor takes from the workspace session (ADR 0014); tests inject fakes of its parts. */
+export interface DoctorConnection extends Pick<WorkspaceConnection, "auth" | "client"> {
+  warehouses: Pick<WarehouseSelection, "resolve" | "list">;
+  statements: DoctorStatements;
+}
 
 /** Outcome of a check: `fail` makes `dak doctor` exit with code 1, `warn` only marks an optional feature as unavailable. */
 export type CheckStatus = "ok" | "warn" | "fail" | "skip";
@@ -21,22 +34,19 @@ export interface DoctorCheck {
 /** Everything the doctor touches, injected so tests run without a workspace. */
 export interface DoctorDependencies {
   settings: Settings;
-  resolveAuth(): Promise<AuthProvider>;
-  createClient(auth: AuthProvider): DatabricksClient;
+  /** Resolves the credentials and builds the Databricks modules with {@link DOCTOR_LIMITS}; rejects with the authentication error. */
+  connect(): Promise<DoctorConnection>;
   runCli(args: string[]): Promise<string>;
   openRepository(path: string): Promise<{ close(): void }>;
   /** Plain `fetch`, used to download an export link exactly as the export manager does. */
   fetch: FetchLike;
   /** Creates the directory if needed, then writes and deletes a temporary file in it; throws when it is not writable. */
   ensureExportDir(dir: string): Promise<void>;
-  /** Waits between polls of the export statement; tests inject an instant fake. */
-  sleep(ms: number): Promise<void>;
 }
 
 const REMOTE_CHECKS = ["Identity", "SQL warehouse", "SQL execution", "information_schema", "Lineage system tables", "Result download"] as const;
 const MIN_CLI = [1, 0, 0] as const;
 const DOWNLOAD_WAIT_BUDGET_MS = 60_000;
-const MAX_POLL_DELAY_MS = 5_000;
 const DOWNLOAD_TIMEOUT_MS = 15_000;
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -55,46 +65,37 @@ export async function ensureWritableDirectory(dir: string): Promise<void> {
   }
 }
 
-async function probe(sql: SqlService, statement: string, warehouseId: string): Promise<void> {
-  await sql.runStatement({ statement, warehouseId, rowLimit: 1 });
-}
-
-interface ExportProbeStatement {
-  status: { state: string; error?: { message?: string } };
-  result?: { external_links?: Array<{ external_link: string }> };
+async function probe(statements: DoctorStatements, statement: string, warehouseId: string): Promise<void> {
+  await statements.submitServerSql({ statement, warehouseId, rowLimit: 1 });
 }
 
 /**
  * Submits `SELECT 1` as an export and downloads its first link without credentials. The link points to cloud storage,
  * so a proxy or firewall that allows the workspace host can still block it. Only the host of the link is reported.
+ * The statement lifecycle owns submitting, polling and the chunk link, as for real exports; the check only bounds the
+ * wait for the export to {@link DOWNLOAD_WAIT_BUDGET_MS}.
  */
-async function resultDownloadCheck(deps: DoctorDependencies, client: DatabricksClient, sql: SqlService, warehouseId: string): Promise<DoctorCheck> {
+async function resultDownloadCheck(deps: DoctorDependencies, statements: DoctorStatements, warehouseId: string): Promise<DoctorCheck> {
   const name = "Result download";
+  const exportHint = "Exports need EXTERNAL_LINKS results; check that the workspace allows them.";
+  const waitBudget = new AbortController();
+  let statementId: string | undefined;
   let link: string;
   let host: string;
+  const timer = setTimeout(() => waitBudget.abort(), DOWNLOAD_WAIT_BUDGET_MS);
   try {
-    const { statementId } = await sql.submitExport({ statement: "SELECT 1", warehouseId }, "csv");
-    const path = `/api/2.0/sql/statements/${encodeURIComponent(statementId)}`;
-    let statement = await client.get<ExportProbeStatement>(path);
-    let waitedMs = 0;
-    for (let attempt = 1; statement.status.state === "PENDING" || statement.status.state === "RUNNING"; attempt++) {
-      if (waitedMs >= DOWNLOAD_WAIT_BUDGET_MS) {
-        await sql.cancelStatement(statementId).catch(() => undefined);
-        return { name, status: "warn", detail: "warehouse still starting; the export did not finish in 60 s", next: "Run dak doctor again in a minute." };
-      }
-      const delayMs = Math.min(attempt * 1000, MAX_POLL_DELAY_MS);
-      await deps.sleep(delayMs);
-      waitedMs += delayMs;
-      statement = await client.get<ExportProbeStatement>(path);
-    }
-    const firstLink = statement.result?.external_links?.[0]?.external_link;
-    if (statement.status.state !== "SUCCEEDED" || firstLink === undefined) {
-      return { name, status: "warn", detail: statement.status.error?.message ?? `export statement is ${statement.status.state} without a download link`, next: "Exports need EXTERNAL_LINKS results; check that the workspace allows them." };
-    }
-    link = firstLink;
+    ({ statementId } = await statements.submitExport({ statement: "SELECT 1", warehouseId }, "csv"));
+    const result = await statements.awaitExport(statementId, waitBudget.signal);
+    link = (result.firstLink ?? (await statements.exportChunkLink(statementId, 0, waitBudget.signal))).url;
     host = new URL(link).hostname;
   } catch (error) {
-    return { name, status: "warn", detail: messageWithoutUrls(messageOf(error)), next: "Exports need EXTERNAL_LINKS results; check that the workspace allows them." };
+    if (waitBudget.signal.aborted && statementId !== undefined) {
+      await statements.cancel(statementId).catch(() => undefined);
+      return { name, status: "warn", detail: "warehouse still starting; the export did not finish in 60 s", next: "Run dak doctor again in a minute." };
+    }
+    return { name, status: "warn", detail: messageWithoutUrls(messageOf(error)), next: exportHint };
+  } finally {
+    clearTimeout(timer);
   }
 
   const blocked = "A proxy or firewall may be blocking the cloud storage host of the result links; allow it so exports can download.";
@@ -111,14 +112,7 @@ async function resultDownloadCheck(deps: DoctorDependencies, client: DatabricksC
   }
 }
 
-async function remoteChecks(deps: DoctorDependencies, auth: AuthProvider): Promise<DoctorCheck[]> {
-  const client = deps.createClient(auth);
-  const sql = createSqlService(client, {
-    maxRows: 10,
-    allowWrites: false,
-    defaultWarehouseId: deps.settings.warehouseId ?? auth.profileWarehouseId,
-    maxResultBytes: 10_000,
-  });
+async function remoteChecks(deps: DoctorDependencies, { client, warehouses, statements }: DoctorConnection): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = [];
 
   try {
@@ -130,8 +124,8 @@ async function remoteChecks(deps: DoctorDependencies, auth: AuthProvider): Promi
 
   let warehouseId: string;
   try {
-    warehouseId = await sql.resolveWarehouse();
-    const warehouse = (await sql.listWarehouses()).find((candidate) => candidate.id === warehouseId);
+    warehouseId = await warehouses.resolve();
+    const warehouse = (await warehouses.list()).find((candidate) => candidate.id === warehouseId);
     checks.push({ name: "SQL warehouse", status: "ok", detail: warehouse === undefined ? warehouseId : `${warehouse.id} (${warehouse.name}, ${warehouse.state})` });
   } catch (error) {
     checks.push({ name: "SQL warehouse", status: "fail", detail: messageOf(error), next: "Set DATABRICKS_WAREHOUSE_ID or get CAN USE on a SQL warehouse." });
@@ -141,7 +135,7 @@ async function remoteChecks(deps: DoctorDependencies, auth: AuthProvider): Promi
 
   let sqlExecutionFailed = false;
   try {
-    const result = await sql.runStatement({ statement: "SELECT 1", warehouseId, rowLimit: 1 });
+    const result = await statements.submitServerSql({ statement: "SELECT 1", warehouseId, rowLimit: 1 });
     checks.push(
       result.state === "SUCCEEDED"
         ? { name: "SQL execution", status: "ok", detail: "SELECT 1 succeeded" }
@@ -153,14 +147,14 @@ async function remoteChecks(deps: DoctorDependencies, auth: AuthProvider): Promi
   }
 
   try {
-    await probe(sql, "SELECT 1 FROM system.information_schema.tables LIMIT 1", warehouseId);
+    await probe(statements, "SELECT 1 FROM system.information_schema.tables LIMIT 1", warehouseId);
     checks.push({ name: "information_schema", status: "ok", detail: "system.information_schema is readable" });
   } catch (error) {
     checks.push({ name: "information_schema", status: "warn", detail: messageOf(error), next: "search_metadata and describe_table tags need SELECT on system.information_schema." });
   }
 
   try {
-    await probe(sql, "SELECT 1 FROM system.access.table_lineage LIMIT 1", warehouseId);
+    await probe(statements, "SELECT 1 FROM system.access.table_lineage LIMIT 1", warehouseId);
     checks.push({ name: "Lineage system tables", status: "ok", detail: "system.access.table_lineage is readable" });
   } catch (error) {
     checks.push({
@@ -171,7 +165,7 @@ async function remoteChecks(deps: DoctorDependencies, auth: AuthProvider): Promi
     });
   }
 
-  checks.push(sqlExecutionFailed ? { name: "Result download", status: "skip", detail: "SQL execution failed" } : await resultDownloadCheck(deps, client, sql, warehouseId));
+  checks.push(sqlExecutionFailed ? { name: "Result download", status: "skip", detail: "SQL execution failed" } : await resultDownloadCheck(deps, statements, warehouseId));
   return checks;
 }
 
@@ -201,18 +195,19 @@ async function cliCheck(deps: DoctorDependencies): Promise<DoctorCheck> {
  */
 export async function runDoctor(deps: DoctorDependencies): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = [];
-  let auth: AuthProvider | undefined;
+  let connection: DoctorConnection | undefined;
   try {
-    auth = await deps.resolveAuth();
+    connection = await deps.connect();
+    const { auth } = connection;
     checks.push({ name: "Authentication", status: "ok", detail: `${auth.method} on ${auth.host} (requested profile: ${deps.settings.profile})` });
   } catch (error) {
     checks.push({ name: "Authentication", status: "fail", detail: messageOf(error), next: "See README > Authentication for the manual steps." });
   }
 
-  if (auth === undefined) {
+  if (connection === undefined) {
     for (const name of REMOTE_CHECKS) checks.push({ name, status: "skip", detail: "authentication failed" });
   } else {
-    checks.push(...(await remoteChecks(deps, auth)));
+    checks.push(...(await remoteChecks(deps, connection)));
   }
 
   const { exportDir } = deps.settings;

@@ -1,6 +1,8 @@
 import type { DatabricksClient } from "./client.ts";
 import { DakError } from "./errors.ts";
-import type { ExportFormat } from "./export/types.ts";
+import type { ExecutionScope } from "./execution-scope.ts";
+import { sleep as defaultSleep, untilAborted } from "./abort.ts";
+import type { ExportFormat, ManifestColumn } from "./export/types.ts";
 
 /** Statement that Databricks failed to plan or run; the message keeps the error class and SQLSTATE. */
 export class SqlError extends DakError {
@@ -59,49 +61,47 @@ export interface StatementResult {
   message?: string;
 }
 
-/** SQL warehouse as listed to the agent. */
-export interface WarehouseSummary {
-  id: string;
-  name: string;
-  state: string;
-  size: string | undefined;
-  serverless: boolean;
-  isDefault: boolean;
+/** Presigned link to one result chunk of an export. It carries credentials in its URL: never log or return it. */
+export interface ExportChunkLink {
+  url: string;
+  rowCount?: number | undefined;
+  /** ISO timestamp after which the link no longer works. */
+  expiration?: string | undefined;
 }
 
-/** Timings that {@link SqlService.executeSql} reports to its caller. */
-export interface ExecutionDiagnostics {
-  /** Milliseconds spent in the read-only check; unset when no `DESCRIBE QUERY` call was needed. */
-  checkMs?: number;
-  /** Warehouse an export was submitted to; set by {@link SqlService.submitExport}. */
-  warehouseId?: string;
+/** What a finished export statement tells the export manager about its result. */
+export interface ExportResultInfo {
+  columns: ManifestColumn[];
+  chunkCount: number;
+  /** Row count of each chunk the manifest lists, by chunk index. */
+  chunkRowCounts: Map<number, number>;
+  /** True when Databricks cut the result at the byte limit. */
+  truncated: boolean;
+  /** Link of chunk 0 when the statement response carried it, so the first download needs no extra request. */
+  firstLink?: ExportChunkLink | undefined;
 }
 
-/** Why the automatic warehouse choice picked a warehouse. */
-export interface WarehouseChosenEvent {
-  warehouseId: string;
-  name: string;
-  reason: "running" | "serverless" | "first";
-}
-
-/** Limits and defaults of the SQL service. */
-export interface SqlServiceOptions {
+/** Limits and collaborators of the statement lifecycle module. */
+export interface StatementLifecycleOptions {
   /** Upper bound for any requested row limit. */
   maxRows: number;
   /** When false, agent statements other than SHOW, DESCRIBE and EXPLAIN are checked with DESCRIBE QUERY before they run. */
   allowWrites: boolean;
-  /** Configured warehouse; otherwise a running one, then a serverless one, then the first is used. */
-  defaultWarehouseId: string | undefined;
   /** Maximum size of the returned rows, applied by Databricks (`byte_limit`) and again locally. */
   maxResultBytes: number;
   /** Size limit of an export, sent as `byte_limit`; defaults to 10 GiB. */
   maxExportBytes?: number;
-  /** Waits between polls of {@link SqlService.getStatement}; replaceable in tests. */
-  sleep?(ms: number): Promise<void>;
+  /** Warehouse that runs a statement: the requested one, or the default or automatic choice. */
+  resolveWarehouse(explicit?: string): Promise<string>;
+  /** Receives the diagnostics of the call that runs the statement (read-only check duration, export warehouse); optional. */
+  scope?: Pick<ExecutionScope, "annotate">;
+  /**
+   * Waits between polls; replaceable in tests. With a `signal` it rejects as soon as the signal aborts and releases its
+   * timer, so an aborted wait does not keep the process alive.
+   */
+  sleep?(ms: number, signal?: AbortSignal): Promise<void>;
   /** Clock in milliseconds; replaceable in tests. */
   now?(): number;
-  /** Called once when a warehouse is chosen automatically (none configured, none passed). */
-  onWarehouseChosen?(event: WarehouseChosenEvent): void;
 }
 
 interface ApiStatement {
@@ -135,12 +135,23 @@ interface ApiChunk {
   next_chunk_internal_link?: string;
 }
 
-interface ApiWarehouse {
-  id: string;
-  name: string;
-  state: string;
-  cluster_size?: string;
-  enable_serverless_compute?: boolean;
+interface ApiExternalLink {
+  chunk_index?: number;
+  row_count?: number;
+  external_link: string;
+  expiration?: string;
+}
+
+/** Response fields of an `EXTERNAL_LINKS` statement. */
+interface ApiExportStatement {
+  status: ApiStatement["status"];
+  manifest?: {
+    total_chunk_count?: number;
+    truncated?: boolean;
+    schema?: { columns?: ManifestColumn[] };
+    chunks?: Array<{ chunk_index: number; row_count?: number }>;
+  };
+  result?: { external_links?: ApiExternalLink[] };
 }
 
 const DEFAULT_ROW_LIMIT = 100;
@@ -157,6 +168,7 @@ const CHECK_ROW_LIMIT = 100;
 const CHECK_BYTE_LIMIT = 10_000_000;
 const DEFAULT_EXPORT_BYTE_LIMIT = 10 * 1024 ** 3;
 const MAX_WAIT_SECONDS = 30;
+const MAX_EXPORT_POLL_WAIT_MS = 10_000;
 const EXPORT_RESULT_FORMAT = { csv: "CSV", parquet: "ARROW_STREAM", sqlite: "JSON_ARRAY" } as const;
 
 /**
@@ -176,6 +188,22 @@ function statementError(status: ApiStatement["status"]): SqlError {
   return new SqlError(`[${error.error_code ?? "FAILED"}] ${error.message ?? "Statement failed"}${sqlState}`);
 }
 
+function chunkLink(link: ApiExternalLink): ExportChunkLink {
+  return { url: link.external_link, rowCount: link.row_count, expiration: link.expiration };
+}
+
+function exportResultInfo(statement: ApiExportStatement): ExportResultInfo {
+  const inlineLink = statement.result?.external_links?.[0];
+  const rowCounts = (statement.manifest?.chunks ?? []).flatMap((chunk): Array<[number, number]> => (chunk.row_count === undefined ? [] : [[chunk.chunk_index, chunk.row_count]]));
+  return {
+    columns: statement.manifest?.schema?.columns ?? [],
+    chunkCount: statement.manifest?.total_chunk_count ?? 0,
+    chunkRowCounts: new Map(rowCounts),
+    truncated: statement.manifest?.truncated === true,
+    firstLink: inlineLink !== undefined && (inlineLink.chunk_index ?? 0) === 0 ? chunkLink(inlineLink) : undefined,
+  };
+}
+
 function capRowsByBytes(rows: Array<Array<string | null>>, maxBytes: number): Array<Array<string | null>> {
   let size = 2;
   const kept: Array<Array<string | null>> = [];
@@ -188,58 +216,13 @@ function capRowsByBytes(rows: Array<Array<string | null>>, maxBytes: number): Ar
   return kept;
 }
 
-/** Creates the SQL service: warehouse selection, statement execution with bounded results and the read-only check. */
-export function createSqlService(client: DatabricksClient, options: SqlServiceOptions) {
+/**
+ * Creates the statement lifecycle module: everything that happens to a Databricks statement after a caller has a
+ * request for it (ADR 0009). It is the only module that builds the statements path.
+ */
+export function createStatementLifecycle(client: DatabricksClient, options: StatementLifecycleOptions) {
   const now = options.now ?? Date.now;
-  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  let automaticWarehouse: string | undefined;
-
-  async function fetchWarehouses(): Promise<ApiWarehouse[]> {
-    const response = await client.get<{ warehouses?: ApiWarehouse[] }>("/api/2.0/sql/warehouses");
-    return response.warehouses ?? [];
-  }
-
-  function chooseWarehouse(warehouses: ApiWarehouse[]): { warehouse: ApiWarehouse; reason: WarehouseChosenEvent["reason"] } | undefined {
-    const running = warehouses.find((warehouse) => warehouse.state === "RUNNING");
-    if (running !== undefined) return { warehouse: running, reason: "running" };
-    const serverless = warehouses.find((warehouse) => warehouse.enable_serverless_compute === true);
-    if (serverless !== undefined) return { warehouse: serverless, reason: "serverless" };
-    const first = warehouses[0];
-    return first === undefined ? undefined : { warehouse: first, reason: "first" };
-  }
-
-  async function resolveWarehouse(explicit?: string): Promise<string> {
-    if (explicit !== undefined) return explicit;
-    if (options.defaultWarehouseId !== undefined) return options.defaultWarehouseId;
-    if (automaticWarehouse === undefined) {
-      const chosen = chooseWarehouse(await fetchWarehouses());
-      if (chosen === undefined) {
-        throw new SqlError(
-          "No SQL warehouse is accessible to this identity. Create one or get CAN USE on an existing one, or set DATABRICKS_WAREHOUSE_ID.",
-        );
-      }
-      automaticWarehouse = chosen.warehouse.id;
-      try {
-        options.onWarehouseChosen?.({ warehouseId: chosen.warehouse.id, name: chosen.warehouse.name, reason: chosen.reason });
-      } catch {
-        // The callback only observes the choice; its failure must not fail the request.
-      }
-    }
-    return automaticWarehouse;
-  }
-
-  async function listWarehouses(): Promise<WarehouseSummary[]> {
-    const warehouses = await fetchWarehouses();
-    const defaultId = options.defaultWarehouseId ?? chooseWarehouse(warehouses)?.warehouse.id;
-    return warehouses.map((warehouse) => ({
-      id: warehouse.id,
-      name: warehouse.name,
-      state: warehouse.state,
-      size: warehouse.cluster_size,
-      serverless: warehouse.enable_serverless_compute === true,
-      isDefault: warehouse.id === defaultId,
-    }));
-  }
+  const sleep = options.sleep ?? defaultSleep;
 
   async function shape(statement: ApiStatement, rowLimit: number, warehouseId: string | undefined): Promise<StatementResult> {
     const { state } = statement.status;
@@ -277,7 +260,7 @@ export function createSqlService(client: DatabricksClient, options: SqlServiceOp
   async function statementBody(request: ExecuteSqlRequest): Promise<StatementBody> {
     return {
       statement: request.statement,
-      warehouse_id: await resolveWarehouse(request.warehouseId),
+      warehouse_id: await options.resolveWarehouse(request.warehouseId),
       ...(request.catalog === undefined ? {} : { catalog: request.catalog }),
       ...(request.schema === undefined ? {} : { schema: request.schema }),
       ...(request.parameters === undefined || request.parameters.length === 0
@@ -298,18 +281,14 @@ export function createSqlService(client: DatabricksClient, options: SqlServiceOp
     };
   }
 
-  async function submit(body: StatementBody): Promise<StatementResult> {
-    return shape(await client.post<ApiStatement>(STATEMENTS_PATH, body), body.row_limit ?? DEFAULT_ROW_LIMIT, body.warehouse_id);
-  }
-
   /**
    * Rejects the statement unless it only reads. A plain leading SHOW, DESCRIBE, DESC or EXPLAIN passes without a call
    * (see {@link isReadCommand}); the fast path has no comment handling because a scanner that disagrees with the
    * Databricks lexer could let a write through. A `;` before the end is rejected without any call, so the check itself
    * never submits several statements. Anything else is analysed by Databricks itself with `DESCRIBE QUERY`, which only
-   * parses queries. `diagnostics.checkMs` is set only when that call ran.
+   * parses queries. The duration of that call is reported to the scope as `checkMs`; nothing is reported when it did not run.
    */
-  async function assertReadOnly(body: StatementBody, diagnostics?: ExecutionDiagnostics): Promise<void> {
+  async function assertReadOnly(body: StatementBody): Promise<void> {
     if (INNER_SEMICOLON.test(body.statement)) {
       throw new ReadOnlyViolationError(
         `Read-only mode: the statement has several statements or a ';' inside a literal, and read-only mode cannot tell them apart. Pass literals that contain ';' as :name parameters. ${WRITES_HINT}`,
@@ -325,7 +304,7 @@ export function createSqlService(client: DatabricksClient, options: SqlServiceOp
       wait_timeout: "50s",
       on_wait_timeout: "CANCEL",
     });
-    if (diagnostics !== undefined) diagnostics.checkMs = now() - startedAt;
+    options.scope?.annotate({ checkMs: now() - startedAt });
     const { state } = check.status;
     if (state === "FAILED") {
       const error = statementError(check.status);
@@ -339,38 +318,49 @@ export function createSqlService(client: DatabricksClient, options: SqlServiceOp
     }
   }
 
-  /** Runs SQL written by this server (metadata tools, doctor probes) without the read-only check. */
-  async function runStatement(request: ExecuteSqlRequest): Promise<StatementResult> {
-    return submit(await statementBody(request));
+  /** Submits the body inline and waits up to 30 s for it; a statement still running is returned with its id and state. */
+  async function submitBody(body: StatementBody): Promise<StatementResult> {
+    return shape(await client.post<ApiStatement>(STATEMENTS_PATH, body), body.row_limit ?? DEFAULT_ROW_LIMIT, body.warehouse_id);
   }
 
   /**
-   * Runs server-written SQL like {@link runStatement}, but cancels a statement that is still running after the wait.
-   * The cancel is best effort: its failure must not hide the "did not finish" error.
+   * Submits a statement of the agent inline and waits up to 30 s for it. Unless writes are allowed it is checked first
+   * (ADR 0008); no argument skips the check. A statement still running is returned with its id and state for {@link get}.
    */
-  async function runQuery(request: ExecuteSqlRequest): Promise<StatementResult> {
-    const result = await runStatement(request);
+  async function submit(request: ExecuteSqlRequest): Promise<StatementResult> {
+    const body = await statementBody(request);
+    if (!options.allowWrites) await assertReadOnly(body);
+    return submitBody(body);
+  }
+
+  /**
+   * Submits SQL that the server wrote itself (doctor probes) inline, without the read-only check, and waits up to 30 s
+   * for it. Only code that composes its own SQL gets this method (ADR 0015); a statement still running is returned.
+   */
+  async function submitServerSql(request: ExecuteSqlRequest): Promise<StatementResult> {
+    return submitBody(await statementBody(request));
+  }
+
+  /**
+   * Runs server-written SQL that must finish: a statement still running after the wait is cancelled and reported as an
+   * error. The cancel is best effort: its failure must not hide the "did not finish" error.
+   */
+  async function query(request: ExecuteSqlRequest): Promise<StatementResult> {
+    const result = await submitServerSql(request);
     if (result.state === "PENDING" || result.state === "RUNNING") {
-      await cancelStatement(result.statementId).catch(() => undefined);
+      await cancel(result.statementId).catch(() => undefined);
       throw new SqlError(`Statement did not finish in time (${result.state}); the warehouse may be starting, retry in a moment.`);
     }
     return result;
   }
 
-  /** Runs one statement from the agent; in read-only mode it is checked with {@link assertReadOnly} first. */
-  async function executeSql(request: ExecuteSqlRequest, diagnostics?: ExecutionDiagnostics): Promise<StatementResult> {
-    const body = await statementBody(request);
-    if (!options.allowWrites) await assertReadOnly(body, diagnostics);
-    return submit(body);
-  }
-
   /**
-   * Starts an export of the full result as EXTERNAL_LINKS and returns without waiting for it. The read-only check is the
-   * same as in {@link executeSql}, so an export cannot run a statement that `execute_sql` would reject.
+   * Starts an export of the full result as EXTERNAL_LINKS and returns without waiting for it. Exports are the agent's
+   * statements, so the read-only policy is the same as in {@link submit}. The warehouse is reported to the scope.
    */
-  async function submitExport(request: ExecuteSqlRequest, format: ExportFormat, diagnostics?: ExecutionDiagnostics): Promise<{ statementId: string; warehouseId: string }> {
+  async function submitExport(request: ExecuteSqlRequest, format: ExportFormat): Promise<{ statementId: string; warehouseId: string }> {
     const { row_limit: _rowLimit, ...inlineBody } = await statementBody(request);
-    if (!options.allowWrites) await assertReadOnly(inlineBody, diagnostics);
+    if (!options.allowWrites) await assertReadOnly(inlineBody);
     const response = await client.post<ApiStatement>(STATEMENTS_PATH, {
       ...inlineBody,
       byte_limit: options.maxExportBytes ?? DEFAULT_EXPORT_BYTE_LIMIT,
@@ -380,7 +370,7 @@ export function createSqlService(client: DatabricksClient, options: SqlServiceOp
       format: EXPORT_RESULT_FORMAT[format],
     } satisfies StatementBody);
     if (response.status.state === "FAILED") throw statementError(response.status);
-    if (diagnostics !== undefined) diagnostics.warehouseId = inlineBody.warehouse_id;
+    options.scope?.annotate({ warehouseId: inlineBody.warehouse_id });
     return { statementId: response.statement_id, warehouseId: inlineBody.warehouse_id };
   }
 
@@ -388,7 +378,7 @@ export function createSqlService(client: DatabricksClient, options: SqlServiceOp
    * Fetches a statement. With `waitSeconds` (0 to 30) it polls with waits of 1 s, 2 s, 3 s... until the statement is
    * no longer PENDING or RUNNING or the time is spent; a statement still running is returned as such.
    */
-  async function getStatement(statementId: string, getOptions: { rowLimit?: number; waitSeconds?: number } = {}): Promise<StatementResult> {
+  async function get(statementId: string, getOptions: { rowLimit?: number; waitSeconds?: number } = {}): Promise<StatementResult> {
     const path = `${STATEMENTS_PATH}/${encodeURIComponent(statementId)}`;
     const requestedSeconds = getOptions.waitSeconds ?? 0;
     const waitSeconds = Number.isFinite(requestedSeconds) ? Math.min(Math.max(requestedSeconds, 0), MAX_WAIT_SECONDS) : 0;
@@ -403,12 +393,41 @@ export function createSqlService(client: DatabricksClient, options: SqlServiceOp
     return shape(statement, Math.min(getOptions.rowLimit ?? options.maxRows, options.maxRows), undefined);
   }
 
-  async function cancelStatement(statementId: string): Promise<void> {
+  /**
+   * Waits until an export statement has succeeded and describes its result. It polls with waits of 1 s, 2 s, 3 s...
+   * growing to 10 s, with no upper bound by design: a statement stuck in `PENDING` or `RUNNING` is polled until
+   * Databricks ends it or `signal` aborts, which rejects with the signal's reason and stops the polling. A statement
+   * that ends in any other state than `SUCCEEDED` is an error.
+   */
+  async function awaitExport(statementId: string, signal: AbortSignal): Promise<ExportResultInfo> {
+    const path = `${STATEMENTS_PATH}/${encodeURIComponent(statementId)}`;
+    for (let attempt = 1; ; attempt++) {
+      signal.throwIfAborted();
+      const statement = await untilAborted(client.get<ApiExportStatement>(path), signal);
+      const { state } = statement.status;
+      if (state === "SUCCEEDED") return exportResultInfo(statement);
+      if (state !== "PENDING" && state !== "RUNNING") {
+        throw new SqlError(statement.status.error?.message ?? `Export statement ended in state ${state}.`);
+      }
+      await untilAborted(sleep(Math.min(attempt * 1000, MAX_EXPORT_POLL_WAIT_MS), signal), signal);
+    }
+  }
+
+  /** Requests a fresh presigned link for result chunk `index` of an export; rejects with the signal's reason on abort. */
+  async function exportChunkLink(statementId: string, index: number, signal: AbortSignal): Promise<ExportChunkLink> {
+    const path = `${STATEMENTS_PATH}/${encodeURIComponent(statementId)}/result/chunks/${index}`;
+    const response = await untilAborted(client.get<{ external_links?: ApiExternalLink[] }>(path), signal);
+    const link = response.external_links?.[0];
+    if (link === undefined) throw new Error(`Export: Databricks returned no link for chunk ${index}.`);
+    return chunkLink(link);
+  }
+
+  async function cancel(statementId: string): Promise<void> {
     await client.post(`${STATEMENTS_PATH}/${encodeURIComponent(statementId)}/cancel`);
   }
 
-  return { executeSql, runStatement, runQuery, submitExport, getStatement, cancelStatement, resolveWarehouse, listWarehouses };
+  return { submit, submitServerSql, query, submitExport, awaitExport, exportChunkLink, get, cancel };
 }
 
-/** Methods returned by {@link createSqlService}. */
-export type SqlService = ReturnType<typeof createSqlService>;
+/** Methods returned by {@link createStatementLifecycle}. */
+export type StatementLifecycle = ReturnType<typeof createStatementLifecycle>;

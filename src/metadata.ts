@@ -1,6 +1,6 @@
 import type { DatabricksClient, QueryValue } from "./client.ts";
 import { InvalidArgumentError, UnsupportedError } from "./errors.ts";
-import { SqlError, type SqlService, type StatementResult } from "./sql.ts";
+import { SqlError, type StatementLifecycle, type StatementResult } from "./statements.ts";
 
 const MAX_PAGES = 50;
 const DEFAULT_SAMPLE_ROWS = 10;
@@ -139,7 +139,7 @@ const clamp = (value: number | undefined, fallback: number, max: number): number
  * Creates the Unity Catalog metadata service: REST listings and descriptions, plus information_schema and lineage
  * queries that the server writes itself (they skip the read-only check).
  */
-export function createMetadataService(client: DatabricksClient, sql: SqlService) {
+export function createMetadataService(client: DatabricksClient, statements: Pick<StatementLifecycle, "query">) {
   async function paginate<T>(path: string, key: string, query: Record<string, QueryValue>): Promise<T[]> {
     const items: T[] = [];
     let pageToken: string | undefined;
@@ -187,7 +187,7 @@ export function createMetadataService(client: DatabricksClient, sql: SqlService)
   async function readTags(fullName: string): Promise<{ table: Record<string, string>; columns: Map<string, Record<string, string>> }> {
     const [catalog, schema, table] = splitName(fullName);
     const filter = "catalog_name = :catalog AND schema_name = :schema AND table_name = :table";
-    const result = await sql.runQuery({
+    const result = await statements.query({
       statement:
         `SELECT NULL AS column_name, tag_name, tag_value FROM system.information_schema.table_tags WHERE ${filter} ` +
         `UNION ALL SELECT column_name, tag_name, tag_value FROM system.information_schema.column_tags WHERE ${filter}`,
@@ -287,7 +287,7 @@ export function createMetadataService(client: DatabricksClient, sql: SqlService)
       `UNION ALL SELECT 'column', table_catalog, table_schema, table_name, column_name, comment ` +
       `FROM system.information_schema.columns WHERE (lower(column_name) LIKE :pattern OR lower(comment) LIKE :pattern)${catalogFilter} ` +
       `LIMIT ${limit}`;
-    const result = await sql.runQuery({
+    const result = await statements.query({
       statement,
       parameters: [
         { name: "pattern", value: `%${request.query.toLowerCase()}%` },
@@ -307,7 +307,7 @@ export function createMetadataService(client: DatabricksClient, sql: SqlService)
 
   async function sampleTable(fullName: string, limit?: number): Promise<StatementResult> {
     const rows = clamp(limit, DEFAULT_SAMPLE_ROWS, MAX_SAMPLE_ROWS);
-    return sql.runQuery({ statement: `SELECT * FROM ${quoteIdentifier(fullName)} LIMIT ${rows}`, rowLimit: rows });
+    return statements.query({ statement: `SELECT * FROM ${quoteIdentifier(fullName)} LIMIT ${rows}`, rowLimit: rows });
   }
 
   async function lineageQuery(fullName: string, direction: "upstream" | "downstream"): Promise<LineageEdge[]> {
@@ -316,7 +316,7 @@ export function createMetadataService(client: DatabricksClient, sql: SqlService)
       `SELECT ${selected} AS table_name, CAST(max(event_time) AS STRING) AS last_seen FROM system.access.table_lineage ` +
       `WHERE ${filtered} = :table AND ${selected} IS NOT NULL GROUP BY ${selected} ORDER BY last_seen DESC LIMIT ${LINEAGE_LIMIT}`;
     try {
-      const result = await sql.runQuery({ statement, parameters: [{ name: "table", value: fullName }], rowLimit: LINEAGE_LIMIT });
+      const result = await statements.query({ statement, parameters: [{ name: "table", value: fullName }], rowLimit: LINEAGE_LIMIT });
       return rowsOf(result).map(([table, lastSeen]) => ({ table: table ?? null, lastSeen: lastSeen ?? null }));
     } catch (error) {
       const message = (error as Error).message;
