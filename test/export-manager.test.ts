@@ -759,26 +759,6 @@ test("cleanup skips an entry removed between listing and stat, and keeps going",
   });
 });
 
-test("start passes the caller's diagnostics to submitExport", async () => {
-  await withLogs("stdio", async ({ logs, dir }) => {
-    const received: unknown[] = [];
-    const statements = {
-      ...fakeStatements({ chunks: 1 }).statements,
-      submitExport: async (_request: unknown, _format: unknown, diagnostics?: { checkMs?: number; warehouseId?: string }) => {
-        received.push(diagnostics);
-        if (diagnostics !== undefined) Object.assign(diagnostics, { checkMs: 4, warehouseId: "wh1" });
-        return { statementId: STATEMENT_ID, warehouseId: "wh1" };
-      },
-    };
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: fakeSink().factory } }));
-    const diagnostics: { checkMs?: number; warehouseId?: string } = {};
-    await manager.start(exportRequest(), diagnostics);
-    assert.deepEqual(diagnostics, { checkMs: 4, warehouseId: "wh1" });
-    assert.equal(received[0], diagnostics);
-    await manager.wait(STATEMENT_ID, 1000);
-  });
-});
-
 test("cancel also cancels the Databricks statement once", async () => {
   await withLogs("stdio", async ({ logs, dir }) => {
     const { statements, cancels } = fakeStatements({ chunks: 2 });

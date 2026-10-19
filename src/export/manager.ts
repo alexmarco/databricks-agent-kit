@@ -4,7 +4,7 @@ import { untilAborted } from "../abort.ts";
 import type { FetchLike } from "../auth.ts";
 import { InvalidArgumentError, messageWithoutUrls } from "../errors.ts";
 import type { ExecutionHandle, LogService } from "../logging/service.ts";
-import type { ExecuteSqlRequest, ExecutionDiagnostics, ExportChunkLink, ExportResultInfo, StatementLifecycle } from "../statements.ts";
+import type { ExecuteSqlRequest, ExportChunkLink, ExportResultInfo, StatementLifecycle } from "../statements.ts";
 import { createCsvSink } from "./csv-sink.ts";
 import { createParquetSink } from "./parquet-sink.ts";
 import { exportId, exportPath } from "./paths.ts";
@@ -27,11 +27,8 @@ export interface ExportManagerDependencies {
 
 /** Background exports keyed by statement id. */
 export interface ExportManager {
-  /**
-   * Submits the statement and returns the `PENDING` state; polling and downloading continue in the background.
-   * `diagnostics` receives the read-only check duration and the warehouse, as filled by `submitExport`.
-   */
-  start(request: { statement: ExecuteSqlRequest; format: ExportFormat; name?: string }, diagnostics?: ExecutionDiagnostics): Promise<ExportState>;
+  /** Submits the statement and returns the `PENDING` state; polling and downloading continue in the background. */
+  start(request: { statement: ExecuteSqlRequest; format: ExportFormat; name?: string }): Promise<ExportState>;
   get(statementId: string): Promise<ExportState | undefined>;
   /** Waits up to `timeoutMs` for the export to end and returns its state at that moment. */
   wait(statementId: string, timeoutMs: number): Promise<ExportState | undefined>;
@@ -239,9 +236,9 @@ export function createExportManager(deps: ExportManagerDependencies): ExportMana
     }
   }
 
-  async function start(request: { statement: ExecuteSqlRequest; format: ExportFormat; name?: string }, diagnostics?: ExecutionDiagnostics): Promise<ExportState> {
+  async function start(request: { statement: ExecuteSqlRequest; format: ExportFormat; name?: string }): Promise<ExportState> {
     await mkdir(dir, { recursive: true, mode: 0o700 });
-    const { statementId } = await deps.statements.submitExport(request.statement, request.format, diagnostics);
+    const { statementId } = await deps.statements.submitExport(request.statement, request.format);
     const id = exportId(request.name, statementId);
     const path = exportPath(dir, id, request.format);
     const running = [...jobs.values()].some((job) => job.state.path === path && !FINAL_STATUSES.has(job.state.status));
