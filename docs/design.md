@@ -1,6 +1,6 @@
 # databricks-agent-kit - Design
 
-Status: approved for implementation (2026-10-18); revised and implemented 2026-10-19 with result export, a minimal tool surface and a logging policy. Implementation plan: [plan.md](plan.md). Decisions: [adr](adr/README.md). Detailed design of the revision: [superpowers/spec/2026-10-19-export-and-tools-design.md](../superpowers/spec/2026-10-19-export-and-tools-design.md).
+Status: approved for implementation (2026-10-18); revised and implemented 2026-10-19 with result export, a minimal tool surface and a logging policy. Implementation plan: [plan.md](plan.md). Decisions: [adr](adr/README.md).
 
 ## 1. Goal
 
@@ -244,8 +244,6 @@ databricks-agent-kit/
   docs/design.md
   docs/plan.md
   docs/adr/               # architecture decision records
-  superpowers/spec/       # design specs of each iteration
-  superpowers/plan/       # implementation plans of each iteration
   README.md
 ```
 
