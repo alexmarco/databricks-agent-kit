@@ -97,7 +97,7 @@ async function runMcp(settings: Settings): Promise<void> {
     });
     const exports = createExportManager({ client, sql, fetch: clientDependencies.fetch, dir: settings.exportDir, logs, sleep: clientDependencies.sleep });
     createdExports = exports;
-    return { sql, statements, metadata: createMetadataService(client, sql), exports };
+    return { sql, statements, metadata: createMetadataService(client, statements), exports };
   });
   const sql = lazy<SqlService>(async () => (await services()).sql);
   const statements = lazy<StatementLifecycle>(async () => (await services()).statements);
