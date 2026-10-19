@@ -30,4 +30,14 @@ Terms used in the code and the documents of `databricks-agent-kit`. Design vocab
 | **Await export**         | `awaitExport` polls an export statement until it succeeds, with waits growing to 10 s and no upper bound, and describes its result (ADR 0010). Opposite of the bounded `get` wait. |
 | **Chunk link**           | The presigned URL of one result chunk of an export, from `exportChunkLink` or inline with the finished statement. It carries credentials: never logged or returned.   |
 | **Statement lookup**     | The module (`src/statement-lookup.ts`, ADR 0011) that answers `get` and `cancel` for any statement id: an id the export manager knows is an export, any other id is a plain statement.        |
-| **Diagnostics**          | `checkMs` and `warehouseId`, filled by the module for the final log entry of a tool call (an out-parameter until the execution scope module replaces it).         |
+| **Diagnostics**          | `checkMs` and `warehouseId`, reported with `scope.annotate` by the statement lifecycle for the final log entry of the current scope (ADR 0012).                   |
+
+## Execution scope
+
+| Term                 | Meaning                                                                                                                                                                                              |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Execution**        | One recorded unit of work in the log: a tool call, a recorded resource read, a background export, or the server lifecycle. It ends `completed`, `failed` or `cancelled`.                              |
+| **Execution scope**  | The module (`src/execution-scope.ts`, ADR 0012) that opens an execution, runs work with it as the current one, writes the single final entry and sets the final status. `scope.run` is its entry point. |
+| **Current scope**    | The execution of the running `scope.run` (and its awaits), as `logs.current()` reports it; `scope.annotate` and the log events of the services find their execution through it.                       |
+| **Final entry**      | The single entry a scope writes when it ends: `info` on success, `warn` without stack trace for a `DakError`, `error` with stack trace otherwise; same arguments, duration and diagnostics in both. |
+| **Cancelled**        | Final status of a scope whose work threw `ExecutionCancelled`; it writes no entry.                                                                                                                   |
