@@ -1,14 +1,23 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { AuthProvider, FetchLike } from "./auth.ts";
-import type { DatabricksClient } from "./client.ts";
+import type { FetchLike } from "./auth.ts";
 import type { Settings } from "./config.ts";
 import { messageWithoutUrls } from "./errors.ts";
-import { createWarehouseSelection } from "./warehouses.ts";
-import type { StatementLifecycle, StatementLifecycleOptions } from "./statements.ts";
+import type { StatementLifecycle } from "./statements.ts";
+import type { WarehouseSelection } from "./warehouses.ts";
+import type { WorkspaceConnection, WorkspaceLimits } from "./workspace-session.ts";
 
 /** The part of the statement lifecycle that the doctor uses. */
 export type DoctorStatements = Pick<StatementLifecycle, "submit" | "submitExport" | "awaitExport" | "exportChunkLink" | "cancel">;
+
+/** The doctor's smaller limits for the workspace session: a probe returns at most 10 rows and nothing writes. */
+export const DOCTOR_LIMITS: WorkspaceLimits = { maxRows: 10, allowWrites: false, maxResultBytes: 10_000 };
+
+/** What the doctor takes from the workspace session (ADR 0014); tests inject fakes of its parts. */
+export interface DoctorConnection extends Pick<WorkspaceConnection, "auth" | "client"> {
+  warehouses: Pick<WarehouseSelection, "resolve" | "list">;
+  statements: DoctorStatements;
+}
 
 /** Outcome of a check: `fail` makes `dak doctor` exit with code 1, `warn` only marks an optional feature as unavailable. */
 export type CheckStatus = "ok" | "warn" | "fail" | "skip";
@@ -25,10 +34,8 @@ export interface DoctorCheck {
 /** Everything the doctor touches, injected so tests run without a workspace. */
 export interface DoctorDependencies {
   settings: Settings;
-  resolveAuth(): Promise<AuthProvider>;
-  createClient(auth: AuthProvider): DatabricksClient;
-  /** Creates the statement lifecycle for the checks; tests inject a fake of its interface. */
-  createStatements(client: DatabricksClient, options: StatementLifecycleOptions): DoctorStatements;
+  /** Resolves the credentials and builds the Databricks modules with {@link DOCTOR_LIMITS}; rejects with the authentication error. */
+  connect(): Promise<DoctorConnection>;
   runCli(args: string[]): Promise<string>;
   openRepository(path: string): Promise<{ close(): void }>;
   /** Plain `fetch`, used to download an export link exactly as the export manager does. */
@@ -105,10 +112,7 @@ async function resultDownloadCheck(deps: DoctorDependencies, statements: DoctorS
   }
 }
 
-async function remoteChecks(deps: DoctorDependencies, auth: AuthProvider): Promise<DoctorCheck[]> {
-  const client = deps.createClient(auth);
-  const warehouses = createWarehouseSelection(client, { defaultWarehouseId: deps.settings.warehouseId ?? auth.profileWarehouseId });
-  const statements = deps.createStatements(client, { maxRows: 10, allowWrites: false, maxResultBytes: 10_000, resolveWarehouse: warehouses.resolve });
+async function remoteChecks(deps: DoctorDependencies, { client, warehouses, statements }: DoctorConnection): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = [];
 
   try {
@@ -191,18 +195,19 @@ async function cliCheck(deps: DoctorDependencies): Promise<DoctorCheck> {
  */
 export async function runDoctor(deps: DoctorDependencies): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = [];
-  let auth: AuthProvider | undefined;
+  let connection: DoctorConnection | undefined;
   try {
-    auth = await deps.resolveAuth();
+    connection = await deps.connect();
+    const { auth } = connection;
     checks.push({ name: "Authentication", status: "ok", detail: `${auth.method} on ${auth.host} (requested profile: ${deps.settings.profile})` });
   } catch (error) {
     checks.push({ name: "Authentication", status: "fail", detail: messageOf(error), next: "See README > Authentication for the manual steps." });
   }
 
-  if (auth === undefined) {
+  if (connection === undefined) {
     for (const name of REMOTE_CHECKS) checks.push({ name, status: "skip", detail: "authentication failed" });
   } else {
-    checks.push(...(await remoteChecks(deps, auth)));
+    checks.push(...(await remoteChecks(deps, connection)));
   }
 
   const { exportDir } = deps.settings;

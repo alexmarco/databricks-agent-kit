@@ -8,15 +8,14 @@ import { Command, Option } from "commander";
 import { defaultAuthDependencies, resolveAuth } from "./auth.ts";
 import { createClient, type ClientDependencies } from "./client.ts";
 import { defaultStorageDir, resolveSettings, type CliFlags, type Settings } from "./config.ts";
-import { ensureWritableDirectory, formatReport, runDoctor } from "./doctor.ts";
+import { DOCTOR_LIMITS, ensureWritableDirectory, formatReport, runDoctor } from "./doctor.ts";
 import { cleanupOrphanedParts } from "./export/manager.ts";
 import { startHttpServer } from "./http.ts";
 import { openLogRepository } from "./logging/repository.ts";
 import { createRateLimitedLogger } from "./logging/rate-limit.ts";
 import { createLogService } from "./logging/service.ts";
 import { createMcpServer } from "./server.ts";
-import { createStatementLifecycle } from "./statements.ts";
-import { createWorkspaceSession, type WorkspaceAdapters } from "./workspace-session.ts";
+import { connectWorkspace, createWorkspaceSession, type WorkspaceAdapters } from "./workspace-session.ts";
 
 const installDir = fileURLToPath(new URL("..", import.meta.url));
 const { version } = JSON.parse(readFileSync(join(installDir, "package.json"), "utf8")) as { version: string };
@@ -103,9 +102,7 @@ async function runMcp(settings: Settings): Promise<void> {
 async function runDoctorCommand(settings: Settings): Promise<number> {
   const checks = await runDoctor({
     settings,
-    resolveAuth: () => resolveAuth(authRequest(settings), defaultAuthDependencies(process.env)),
-    createClient: (auth) => createClient(auth, clientDependencies),
-    createStatements: (client, options) => createStatementLifecycle(client, { ...options, sleep: clientDependencies.sleep }),
+    connect: () => connectWorkspace(workspaceAdapters(settings), { warehouseId: settings.warehouseId, limits: DOCTOR_LIMITS }),
     runCli: (args) => defaultAuthDependencies(process.env).runCli(args),
     openRepository: openLogRepository,
     fetch: clientDependencies.fetch,
