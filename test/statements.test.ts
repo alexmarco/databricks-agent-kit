@@ -513,3 +513,130 @@ test("submitExport fills the diagnostics with the check duration and the warehou
   const submitted = await createStatementLifecycle(checked.client, readOnly).submitExport({ statement: "SHOW TABLES" }, "csv", unchecked);
   assert.deepEqual(unchecked, { warehouseId: submitted.warehouseId });
 });
+
+const exportSucceeded = (extra: Record<string, unknown> = {}) => ({
+  statement_id: "ex1",
+  status: { state: "SUCCEEDED" },
+  manifest: {
+    total_chunk_count: 3,
+    total_row_count: 30,
+    truncated: true,
+    schema: { columns: [{ name: "id", type_name: "INT", type_text: "INT", position: 0 }] },
+    chunks: [0, 1, 2].map((chunkIndex) => ({ chunk_index: chunkIndex, row_count: 10 })),
+  },
+  result: { external_links: [{ chunk_index: 0, row_count: 10, external_link: "https://storage.example/chunk-0", expiration: "2030-01-01T00:00:00.000Z" }] },
+  ...extra,
+});
+
+test("awaitExport describes a finished export and fetches the statement by its encoded id", async () => {
+  const { client, calls } = fakeClient(() => exportSucceeded());
+  const result = await createStatementLifecycle(client, options).awaitExport("ex 1", new AbortController().signal);
+  assert.deepEqual(calls.map((call) => `${call.method} ${call.path}`), ["GET /api/2.0/sql/statements/ex%201"]);
+  assert.deepEqual(result.columns.map((column) => column.name), ["id"]);
+  assert.equal(result.chunkCount, 3);
+  assert.equal(result.truncated, true);
+  assert.deepEqual([...result.chunkRowCounts], [[0, 10], [1, 10], [2, 10]]);
+  assert.deepEqual(result.firstLink, { url: "https://storage.example/chunk-0", rowCount: 10, expiration: "2030-01-01T00:00:00.000Z" });
+});
+
+test("awaitExport reports no first link when the statement carries none or one of another chunk", async () => {
+  const none = fakeClient(() => exportSucceeded({ result: undefined }));
+  assert.equal((await createStatementLifecycle(none.client, options).awaitExport("ex1", new AbortController().signal)).firstLink, undefined);
+
+  const other = fakeClient(() => exportSucceeded({ result: { external_links: [{ chunk_index: 2, external_link: "https://storage.example/chunk-2" }] } }));
+  assert.equal((await createStatementLifecycle(other.client, options).awaitExport("ex1", new AbortController().signal)).firstLink, undefined);
+});
+
+test("awaitExport describes an export without chunks", async () => {
+  const { client } = fakeClient(() => ({ statement_id: "ex1", status: { state: "SUCCEEDED" }, manifest: { total_chunk_count: 0, total_row_count: 0 } }));
+  const result = await createStatementLifecycle(client, options).awaitExport("ex1", new AbortController().signal);
+  assert.deepEqual({ columns: result.columns, chunkCount: result.chunkCount, truncated: result.truncated, rowCounts: result.chunkRowCounts.size }, { columns: [], chunkCount: 0, truncated: false, rowCounts: 0 });
+});
+
+test("awaitExport polls with waits growing to 10 s and no upper bound", async () => {
+  const states = Array.from({ length: 13 }, () => "RUNNING");
+  const { client, calls } = fakeClient(() => (states.length > 0 ? { statement_id: "ex1", status: { state: states.shift() } } : exportSucceeded()));
+  const { lifecycle, sleeps } = pollingLifecycle(client);
+  await lifecycle.awaitExport("ex1", new AbortController().signal);
+  assert.deepEqual(sleeps, [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10_000, 10_000, 10_000, 10_000]);
+  assert.equal(calls.length, 14);
+});
+
+test("awaitExport waits on PENDING like on RUNNING", async () => {
+  const states = ["PENDING", "RUNNING"];
+  const { client } = fakeClient(() => (states.length > 0 ? { statement_id: "ex1", status: { state: states.shift() } } : exportSucceeded()));
+  const { lifecycle, sleeps } = pollingLifecycle(client);
+  await lifecycle.awaitExport("ex1", new AbortController().signal);
+  assert.deepEqual(sleeps, [1000, 2000]);
+});
+
+test("awaitExport raises SqlError with the Databricks message for a failed statement", async () => {
+  const { client } = fakeClient(() => failed("[TABLE_OR_VIEW_NOT_FOUND] missing", "42P01"));
+  await assert.rejects(createStatementLifecycle(client, options).awaitExport("ex1", new AbortController().signal), (error: unknown) => {
+    assert.ok(error instanceof SqlError);
+    assert.equal(error.message, "[TABLE_OR_VIEW_NOT_FOUND] missing");
+    return true;
+  });
+});
+
+test("awaitExport raises SqlError naming the state of a canceled or closed statement", async () => {
+  for (const state of ["CANCELED", "CLOSED"]) {
+    const { client } = fakeClient(() => ({ statement_id: "ex1", status: { state } }));
+    await assert.rejects(createStatementLifecycle(client, options).awaitExport("ex1", new AbortController().signal), (error: unknown) => {
+      assert.ok(error instanceof SqlError);
+      assert.equal(error.message, `Export statement ended in state ${state}.`);
+      return true;
+    });
+  }
+});
+
+test("awaitExport stops polling at once when the signal aborts during a wait", async () => {
+  const { client, calls } = fakeClient(() => ({ statement_id: "ex1", status: { state: "RUNNING" } }));
+  let sleeping = false;
+  const lifecycle = createStatementLifecycle(client, {
+    ...options,
+    sleep: () => {
+      sleeping = true;
+      return new Promise<void>(() => undefined);
+    },
+  });
+  const controller = new AbortController();
+  const pending = lifecycle.awaitExport("ex1", controller.signal);
+  while (!sleeping) await new Promise((resolve) => setTimeout(resolve, 1));
+  const reason = new Error("stop");
+  controller.abort(reason);
+  await assert.rejects(pending, reason);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(calls.length, 1);
+});
+
+test("exportChunkLink requests the link of a chunk by the encoded statement id", async () => {
+  const { client, calls } = fakeClient(() => ({ external_links: [{ chunk_index: 2, row_count: 7, external_link: "https://storage.example/chunk-2", expiration: "2030-01-01T00:00:00.000Z" }] }));
+  const link = await createStatementLifecycle(client, options).exportChunkLink("ex 1", 2, new AbortController().signal);
+  assert.deepEqual(calls.map((call) => `${call.method} ${call.path}`), ["GET /api/2.0/sql/statements/ex%201/result/chunks/2"]);
+  assert.deepEqual(link, { url: "https://storage.example/chunk-2", rowCount: 7, expiration: "2030-01-01T00:00:00.000Z" });
+});
+
+test("exportChunkLink fails when Databricks returns no link", async () => {
+  for (const response of [{}, { external_links: [] }]) {
+    const { client } = fakeClient(() => response);
+    await assert.rejects(createStatementLifecycle(client, options).exportChunkLink("ex1", 4, new AbortController().signal), /no link for chunk 4/);
+  }
+});
+
+test("exportChunkLink rejects with the signal's reason when the signal aborts during the request", async () => {
+  const controller = new AbortController();
+  const client = { host: "https://ws", get: () => new Promise(() => undefined), post: async () => ({}) } as unknown as DatabricksClient;
+  const pending = createStatementLifecycle(client, options).exportChunkLink("ex1", 0, controller.signal);
+  const reason = new Error("stop");
+  controller.abort(reason);
+  await assert.rejects(pending, reason);
+});
+
+test("awaitExport rejects at once with an already aborted signal", async () => {
+  const { client, calls } = fakeClient(() => exportSucceeded());
+  const controller = new AbortController();
+  controller.abort(new Error("stop"));
+  await assert.rejects(createStatementLifecycle(client, options).awaitExport("ex1", controller.signal), /stop/);
+  assert.equal(calls.length, 0);
+});

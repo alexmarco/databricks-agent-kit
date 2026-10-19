@@ -91,7 +91,7 @@ async function runMcp(settings: Settings): Promise<void> {
       maxExportBytes: settings.exportMaxBytes,
       resolveWarehouse: sql.resolveWarehouse,
     });
-    const exports = createExportManager({ client, statements, fetch: clientDependencies.fetch, dir: settings.exportDir, logs, sleep: clientDependencies.sleep });
+    const exports = createExportManager({ statements, fetch: clientDependencies.fetch, dir: settings.exportDir, logs, sleep: clientDependencies.sleep });
     createdExports = exports;
     return { sql, statements, metadata: createMetadataService(client, statements), exports };
   });
