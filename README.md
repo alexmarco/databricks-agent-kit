@@ -11,7 +11,7 @@ Catalog metadata, over **stdio** or **Streamable HTTP**, with persistent operati
 - Features the workspace does not offer (edition, admin settings, permissions) fail with an explicit message;
   `dak doctor` reports them up front.
 
-Design and plan: [docs/design.md](docs/design.md), [docs/plan.md](docs/plan.md).
+Design: [docs/design.md](docs/design.md).
 
 ## Requirements
 

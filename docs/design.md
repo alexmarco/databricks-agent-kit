@@ -1,6 +1,6 @@
 # databricks-agent-kit - Design
 
-Status: approved for implementation (2026-10-18); revised and implemented 2026-10-19 with result export, a minimal tool surface and a logging policy. Implementation plan: [plan.md](plan.md). Decisions: [adr](adr/README.md).
+Status: approved for implementation (2026-10-18); revised and implemented 2026-10-19 with result export, a minimal tool surface and a logging policy. Decisions: [adr](adr/README.md).
 
 ## 1. Goal
 
@@ -242,7 +242,6 @@ databricks-agent-kit/
     doctor.ts             # environment checks
   test/                   # node:test
   docs/design.md
-  docs/plan.md
   docs/adr/               # architecture decision records
   README.md
 ```
