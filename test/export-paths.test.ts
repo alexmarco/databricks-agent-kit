@@ -41,7 +41,7 @@ test("sanitizeExportName prefixes Windows reserved device names with an undersco
   assert.equal(sanitizeExportName("CONSOLE"), "CONSOLE");
   assert.equal(sanitizeExportName("COM10"), "COM10");
   assert.equal(sanitizeExportName("COM0"), "COM0");
-  assert.ok(sanitizeExportName("CON." + "a".repeat(100)).length <= 64);
+  assert.ok(sanitizeExportName(`CON.${"a".repeat(100)}`).length <= 64);
 });
 
 test("exportId joins the sanitized name and the full statement id", () => {
@@ -54,7 +54,10 @@ test("exportId joins the sanitized name and the full statement id", () => {
 
 test("exportId tells apart statement ids that share their first characters", () => {
   // Databricks statement ids are time-ordered: ids of statements minutes apart share their first 8 characters.
-  assert.notEqual(exportId(undefined, "01f0abcd-1111-1a2b-9c8d-0123456789ab"), exportId(undefined, "01f0abcd-2222-1a2b-9c8d-0123456789ab"));
+  assert.notEqual(
+    exportId(undefined, "01f0abcd-1111-1a2b-9c8d-0123456789ab"),
+    exportId(undefined, "01f0abcd-2222-1a2b-9c8d-0123456789ab"),
+  );
 });
 
 test("exportId treats the statement id as untrusted text", () => {

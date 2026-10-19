@@ -82,7 +82,9 @@ test("failed executions record the error, stack trace and failed status", (t) =>
   execution.fail(new Error("boom"));
   service.close();
   const events = memory.events();
-  const start = events.find((event) => event.type === "execution-start" && event.execution.executionId === execution.executionId);
+  const start = events.find(
+    (event) => event.type === "execution-start" && event.execution.executionId === execution.executionId,
+  );
   assert.ok(start && start.type === "execution-start");
   assert.equal(start.execution.transport, "http");
   assert.equal(start.execution.resourceUri, "resource://logs/stats");
@@ -102,7 +104,9 @@ test("cancelled executions are marked as cancelled", (t) => {
   const execution = service.startExecution({ toolName: "execute_sql" });
   execution.cancel();
   service.close();
-  const end = memory.events().find((event) => event.type === "execution-end" && event.executionId === execution.executionId);
+  const end = memory
+    .events()
+    .find((event) => event.type === "execution-end" && event.executionId === execution.executionId);
   assert.ok(end && end.type === "execution-end" && end.status === "cancelled");
 });
 
@@ -119,7 +123,11 @@ test("entries below the configured level are dropped; executions are always reco
   const messages = memory.events().flatMap((event) => (event.type === "log" ? [event.entry.message] : []));
   assert.ok(messages.includes("visible"));
   assert.ok(!messages.includes("hidden"));
-  assert.ok(memory.events().some((event) => event.type === "execution-start" && event.execution.executionId === execution.executionId));
+  assert.ok(
+    memory
+      .events()
+      .some((event) => event.type === "execution-start" && event.execution.executionId === execution.executionId),
+  );
 });
 
 test("secrets are redacted from metadata", (t) => {
@@ -127,11 +135,19 @@ test("secrets are redacted from metadata", (t) => {
   const memory = memoryRepository();
   const service = createLogService({ repository: memory.repository, transport: "stdio", level: "info" });
   const execution = service.startExecution({ toolName: "x" });
-  execution.info("call", { statement: "SELECT 1", token: "dapi123", nested: { client_secret: "s", Authorization: "Bearer x", keep: 1 } });
+  execution.info("call", {
+    statement: "SELECT 1",
+    token: "dapi123",
+    nested: { client_secret: "s", Authorization: "Bearer x", keep: 1 },
+  });
   service.close();
   const entry = memory.events().find((event) => event.type === "log" && event.entry.message === "call");
   assert.ok(entry && entry.type === "log");
-  assert.deepEqual(entry.entry.metadata, { statement: "SELECT 1", token: "[REDACTED]", nested: { client_secret: "[REDACTED]", Authorization: "[REDACTED]", keep: 1 } });
+  assert.deepEqual(entry.entry.metadata, {
+    statement: "SELECT 1",
+    token: "[REDACTED]",
+    nested: { client_secret: "[REDACTED]", Authorization: "[REDACTED]", keep: 1 },
+  });
 });
 
 test("purges every 24 hours and close flushes, stops timers and closes the repository", (t) => {
@@ -144,7 +160,10 @@ test("purges every 24 hours and close flushes, stops timers and closes the repos
   service.close();
   assert.ok(memory.events().some((event) => event.type === "log" && event.entry.message === "pending"));
   assert.ok(memory.isClosed());
-  const lifecycleEnd = memory.events().filter((event) => event.type === "execution-end").at(-1);
+  const lifecycleEnd = memory
+    .events()
+    .filter((event) => event.type === "execution-end")
+    .at(-1);
   assert.ok(lifecycleEnd && lifecycleEnd.type === "execution-end" && lifecycleEnd.status === "completed");
   const purgesBefore = memory.purges.length;
   t.mock.timers.tick(86_400_000);

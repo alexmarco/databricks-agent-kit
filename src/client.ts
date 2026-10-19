@@ -80,7 +80,11 @@ function errorFromResponse(status: number, bodyText: string): DatabricksApiError
     payload = undefined;
   }
   if (payload?.error_code === undefined) {
-    return new DatabricksApiError(status, `HTTP_${status}`, `HTTP ${status} from Databricks: ${bodyText.slice(0, 200)}`);
+    return new DatabricksApiError(
+      status,
+      `HTTP_${status}`,
+      `HTTP ${status} from Databricks: ${bodyText.slice(0, 200)}`,
+    );
   }
   const errorCode = payload.error_code;
   const hint = HINTS[errorCode] ?? (status === 401 ? HINTS.UNAUTHENTICATED : undefined);
@@ -90,7 +94,9 @@ function errorFromResponse(status: number, bodyText: string): DatabricksApiError
 
 function retryDelay(response: Response, attempt: number): number {
   const retryAfter = Number(response.headers.get("retry-after"));
-  return Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, MAX_RETRY_DELAY_MS) : BASE_BACKOFF_MS * 2 ** attempt;
+  return Number.isFinite(retryAfter) && retryAfter > 0
+    ? Math.min(retryAfter * 1000, MAX_RETRY_DELAY_MS)
+    : BASE_BACKOFF_MS * 2 ** attempt;
 }
 
 /**
@@ -101,7 +107,11 @@ export function redactPath(path: string): string {
   const withoutQuery = path.split("?")[0] ?? "";
   return withoutQuery
     .split("/")
-    .map((segment) => (/[a-z]/i.test(segment) && segment.includes(".")) || (segment.length >= 8 && /\d/.test(segment)) ? ":id" : segment)
+    .map((segment) =>
+      (/[a-z]/i.test(segment) && segment.includes(".")) || (segment.length >= 8 && /\d/.test(segment))
+        ? ":id"
+        : segment,
+    )
     .join("/");
 }
 
@@ -124,10 +134,18 @@ function isTimeout(error: unknown): boolean {
  * @throws {DakError} From its methods, when a request times out (GET only after retries are exhausted).
  */
 export function createClient(auth: AuthProvider, deps: ClientDependencies): DatabricksClient {
-  async function request<T>(method: "GET" | "POST", path: string, query?: Record<string, QueryValue>, body?: unknown): Promise<T> {
+  async function request<T>(
+    method: "GET" | "POST",
+    path: string,
+    query?: Record<string, QueryValue>,
+    body?: unknown,
+  ): Promise<T> {
     const url = new URL(path, auth.host);
     if (url.origin !== new URL(auth.host).origin) {
-      throw new DakError("DATABRICKS_API", `Refusing to send credentials to ${url.origin}; only ${auth.host} is allowed.`);
+      throw new DakError(
+        "DATABRICKS_API",
+        `Refusing to send credentials to ${url.origin}; only ${auth.host} is allowed.`,
+      );
     }
     for (const [key, value] of Object.entries(query ?? {})) {
       if (value !== undefined) url.searchParams.set(key, String(value));
@@ -162,12 +180,24 @@ export function createClient(auth: AuthProvider, deps: ClientDependencies): Data
         if (error instanceof SyntaxError) throw error;
         if (method === "GET" && attempt < MAX_RETRIES) {
           const delayMs = BASE_BACKOFF_MS * 2 ** attempt;
-          notify(() => deps.onRetry?.({ method, path: loggedPath, attempt, delayMs, error: error instanceof Error ? error.message : String(error) }));
+          notify(() =>
+            deps.onRetry?.({
+              method,
+              path: loggedPath,
+              attempt,
+              delayMs,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
           await deps.sleep(delayMs);
           continue;
         }
         if (isTimeout(error)) {
-          throw new DakError("DATABRICKS_API", `Request to ${loggedPath} timed out after ${REQUEST_TIMEOUT_MS / 1000} s`, { cause: error });
+          throw new DakError(
+            "DATABRICKS_API",
+            `Request to ${loggedPath} timed out after ${REQUEST_TIMEOUT_MS / 1000} s`,
+            { cause: error },
+          );
         }
         throw error;
       }

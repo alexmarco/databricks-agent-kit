@@ -21,7 +21,10 @@ export interface WorkspaceAdapters {
 }
 
 /** Limits of the statement lifecycle, which the doctor keeps smaller than the server. */
-export type WorkspaceLimits = Pick<StatementLifecycleOptions, "maxRows" | "allowWrites" | "maxResultBytes" | "maxExportBytes">;
+export type WorkspaceLimits = Pick<
+  StatementLifecycleOptions,
+  "maxRows" | "allowWrites" | "maxResultBytes" | "maxExportBytes"
+>;
 
 export interface ConnectOptions {
   /** Configured warehouse; the profile's warehouse is the fallback. */
@@ -66,9 +69,14 @@ export interface WorkspaceSession {
 }
 
 /** Resolves credentials once and builds the client, warehouse selection and statement lifecycle. */
-export async function connectWorkspace(adapters: WorkspaceAdapters, options: ConnectOptions): Promise<WorkspaceConnection> {
+export async function connectWorkspace(
+  adapters: WorkspaceAdapters,
+  options: ConnectOptions,
+): Promise<WorkspaceConnection> {
   const { logging } = options;
-  const auth = await adapters.resolveAuth(logging && ((method) => logging.logs.current().debug("Token refreshed", { method })));
+  const auth = await adapters.resolveAuth(
+    logging && ((method) => logging.logs.current().debug("Token refreshed", { method })),
+  );
   const client = adapters.createClient(
     auth,
     logging === undefined
@@ -80,7 +88,9 @@ export async function connectWorkspace(adapters: WorkspaceAdapters, options: Con
   );
   const warehouses = createWarehouseSelection(client, {
     defaultWarehouseId: options.warehouseId ?? auth.profileWarehouseId,
-    ...(logging && { onWarehouseChosen: (event) => logging.logs.current().info("Warehouse chosen automatically", { ...event }) }),
+    ...(logging && {
+      onWarehouseChosen: (event) => logging.logs.current().info("Warehouse chosen automatically", { ...event }),
+    }),
   });
   logging?.logs.lifecycle.info("Databricks credentials resolved", { host: auth.host, method: auth.method });
   const statements = createStatementLifecycle(client, {
@@ -96,14 +106,27 @@ export async function connectWorkspace(adapters: WorkspaceAdapters, options: Con
  * Creates the session of the server: the workspace is built on the first `workspace()` call, so the server starts, and
  * serves its log resources, without credentials. Shutdown only touches what exists.
  */
-export function createWorkspaceSession(adapters: WorkspaceAdapters, options: WorkspaceSessionOptions): WorkspaceSession {
+export function createWorkspaceSession(
+  adapters: WorkspaceAdapters,
+  options: WorkspaceSessionOptions,
+): WorkspaceSession {
   const scope = createExecutionScope(options.logs);
   let pending: Promise<Workspace> | undefined;
   let closed = false;
 
   const build = async (): Promise<Workspace> => {
-    const connection = await connectWorkspace(adapters, { warehouseId: options.warehouseId, limits: options.limits, logging: { logs: options.logs, scope } });
-    const exports = createExportManager({ statements: connection.statements, fetch: adapters.fetch, dir: options.exportDir, scope, sleep: adapters.sleep });
+    const connection = await connectWorkspace(adapters, {
+      warehouseId: options.warehouseId,
+      limits: options.limits,
+      logging: { logs: options.logs, scope },
+    });
+    const exports = createExportManager({
+      statements: connection.statements,
+      fetch: adapters.fetch,
+      dir: options.exportDir,
+      scope,
+      sleep: adapters.sleep,
+    });
     return { ...connection, metadata: createMetadataService(connection.client, connection.statements), exports };
   };
 

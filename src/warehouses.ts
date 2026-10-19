@@ -48,7 +48,9 @@ export function createWarehouseSelection(client: DatabricksClient, options: Ware
     return response.warehouses ?? [];
   }
 
-  function chooseWarehouse(warehouses: ApiWarehouse[]): { warehouse: ApiWarehouse; reason: WarehouseChosenEvent["reason"] } | undefined {
+  function chooseWarehouse(
+    warehouses: ApiWarehouse[],
+  ): { warehouse: ApiWarehouse; reason: WarehouseChosenEvent["reason"] } | undefined {
     const running = warehouses.find((warehouse) => warehouse.state === "RUNNING");
     if (running !== undefined) return { warehouse: running, reason: "running" };
     const serverless = warehouses.find((warehouse) => warehouse.enable_serverless_compute === true);
@@ -65,7 +67,11 @@ export function createWarehouseSelection(client: DatabricksClient, options: Ware
       );
     }
     try {
-      options.onWarehouseChosen?.({ warehouseId: chosen.warehouse.id, name: chosen.warehouse.name, reason: chosen.reason });
+      options.onWarehouseChosen?.({
+        warehouseId: chosen.warehouse.id,
+        name: chosen.warehouse.name,
+        reason: chosen.reason,
+      });
     } catch {
       // The callback only observes the choice; its failure must not fail the request.
     }

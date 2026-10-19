@@ -76,7 +76,10 @@ const isTrue = (value: string | undefined): boolean => value === "true" || value
 
 /** Per-user state directory, so the logs (SQL text included) are not shared through the install directory. */
 export function defaultStorageDir(env: Environment, platform: NodeJS.Platform, home: string): string {
-  const base = platform === "win32" ? (env.LOCALAPPDATA ?? join(home, "AppData", "Local")) : (env.XDG_STATE_HOME ?? join(home, ".local", "state"));
+  const base =
+    platform === "win32"
+      ? (env.LOCALAPPDATA ?? join(home, "AppData", "Local"))
+      : (env.XDG_STATE_HOME ?? join(home, ".local", "state"));
   return join(base, "databricks-agent-kit");
 }
 
@@ -100,7 +103,10 @@ export function resolveSettings(flags: CliFlags, env: Environment, defaultStorag
     httpToken: env.DAK_HTTP_TOKEN,
     storageDir,
     exportDir: env.DAK_EXPORT_DIR ?? join(storageDir, "exports"),
-    exportMaxBytes: env.DAK_EXPORT_MAX_BYTES === undefined ? 10 * 1024 ** 3 : parsePositiveInteger(env.DAK_EXPORT_MAX_BYTES, "DAK_EXPORT_MAX_BYTES"),
+    exportMaxBytes:
+      env.DAK_EXPORT_MAX_BYTES === undefined
+        ? 10 * 1024 ** 3
+        : parsePositiveInteger(env.DAK_EXPORT_MAX_BYTES, "DAK_EXPORT_MAX_BYTES"),
     logLevel: env.DAK_LOG_LEVEL === undefined ? "info" : parseLogLevel(env.DAK_LOG_LEVEL),
   };
 }

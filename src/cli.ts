@@ -41,7 +41,8 @@ function authRequest(settings: Settings) {
 /** The real credentials, client, `fetch` and timer behind the workspace session. */
 function workspaceAdapters(settings: Settings): WorkspaceAdapters {
   return {
-    resolveAuth: (onRefresh) => resolveAuth(authRequest(settings), { ...defaultAuthDependencies(process.env), ...(onRefresh && { onRefresh }) }),
+    resolveAuth: (onRefresh) =>
+      resolveAuth(authRequest(settings), { ...defaultAuthDependencies(process.env), ...(onRefresh && { onRefresh }) }),
     createClient: (auth, observers) => createClient(auth, { ...clientDependencies, ...observers }),
     fetch: clientDependencies.fetch,
     sleep,
@@ -52,14 +53,29 @@ async function runMcp(settings: Settings): Promise<void> {
   const repository = await openLogRepository(join(settings.storageDir, "logs.db"));
   const logs = createLogService({ repository, transport: settings.transport, level: settings.logLevel });
   // Orphan .part files need no credentials, so they are removed at startup without blocking it.
-  void cleanupOrphanedParts(settings.exportDir).catch((error: unknown) => logs.lifecycle.warn("Export cleanup failed", { dir: settings.exportDir }, error));
+  void cleanupOrphanedParts(settings.exportDir).catch((error: unknown) =>
+    logs.lifecycle.warn("Export cleanup failed", { dir: settings.exportDir }, error),
+  );
   const session = createWorkspaceSession(workspaceAdapters(settings), {
     warehouseId: settings.warehouseId,
-    limits: { maxRows: settings.maxRows, allowWrites: settings.allowWrites, maxResultBytes: 100_000, maxExportBytes: settings.exportMaxBytes },
+    limits: {
+      maxRows: settings.maxRows,
+      allowWrites: settings.allowWrites,
+      maxResultBytes: 100_000,
+      maxExportBytes: settings.exportMaxBytes,
+    },
     logs,
     exportDir: settings.exportDir,
   });
-  const factory = () => createMcpServer({ workspace: session.workspace, scope: session.scope, logs, repository, version, allowWrites: settings.allowWrites });
+  const factory = () =>
+    createMcpServer({
+      workspace: session.workspace,
+      scope: session.scope,
+      logs,
+      repository,
+      version,
+      allowWrites: settings.allowWrites,
+    });
 
   let stopTransport: () => Promise<void>;
   try {
@@ -72,7 +88,13 @@ async function runMcp(settings: Settings): Promise<void> {
         UNAUTHORIZED_LOG_INTERVAL_MS,
         Date.now,
       );
-      const http = await startHttpServer({ host: settings.httpHost, port: settings.httpPort, token: settings.httpToken, createServer: factory, onUnauthorized: logRejection });
+      const http = await startHttpServer({
+        host: settings.httpHost,
+        port: settings.httpPort,
+        token: settings.httpToken,
+        createServer: factory,
+        onUnauthorized: logRejection,
+      });
       process.stderr.write(`dak: MCP server listening on ${http.url}\n`);
       stopTransport = () => http.close();
     }
@@ -103,7 +125,8 @@ async function runMcp(settings: Settings): Promise<void> {
 async function runDoctorCommand(settings: Settings): Promise<number> {
   const checks = await runDoctor({
     settings,
-    connect: () => connectWorkspace(workspaceAdapters(settings), { warehouseId: settings.warehouseId, limits: DOCTOR_LIMITS }),
+    connect: () =>
+      connectWorkspace(workspaceAdapters(settings), { warehouseId: settings.warehouseId, limits: DOCTOR_LIMITS }),
     runCli: (args) => defaultAuthDependencies(process.env).runCli(args),
     openRepository: openLogRepository,
     fetch: clientDependencies.fetch,
@@ -116,8 +139,10 @@ async function runDoctorCommand(settings: Settings): Promise<number> {
 /** Parses the command line, runs the selected command and returns its exit code (undefined while `mcp` keeps serving). */
 async function main(argv: string[]): Promise<number | undefined> {
   let exitCode: number | undefined;
-  const settingsFrom = (flags: CliFlags) => resolveSettings(flags, process.env, defaultStorageDir(process.env, process.platform, homedir()));
-  const profileOption = () => new Option("--profile <name>", "profile in ~/.databrickscfg; environment credentials are then ignored");
+  const settingsFrom = (flags: CliFlags) =>
+    resolveSettings(flags, process.env, defaultStorageDir(process.env, process.platform, homedir()));
+  const profileOption = () =>
+    new Option("--profile <name>", "profile in ~/.databrickscfg; environment credentials are then ignored");
 
   const program = new Command("dak")
     .description("Databricks MCP server for coding agents")

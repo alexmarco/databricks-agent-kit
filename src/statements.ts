@@ -163,7 +163,7 @@ const WRITES_HINT = "Start the server with --allow-writes (or DAK_ALLOW_WRITES=t
  */
 const READ_COMMAND = /^[ \t\r\n]*(?:SHOW|DESCRIBE|DESC|EXPLAIN)(?![ \t\r\n]*:)(?:[ \t\r\n]|$)/i;
 /** A `;` before the last non-whitespace character: several statements, a script or a literal holding `;`. */
-const INNER_SEMICOLON = /;[^]*[^ \t\r\n]/;
+const INNER_SEMICOLON = /;[\s\S]*[^ \t\r\n]/;
 const CHECK_ROW_LIMIT = 100;
 const CHECK_BYTE_LIMIT = 10_000_000;
 const DEFAULT_EXPORT_BYTE_LIMIT = 10 * 1024 ** 3;
@@ -194,7 +194,9 @@ function chunkLink(link: ApiExternalLink): ExportChunkLink {
 
 function exportResultInfo(statement: ApiExportStatement): ExportResultInfo {
   const inlineLink = statement.result?.external_links?.[0];
-  const rowCounts = (statement.manifest?.chunks ?? []).flatMap((chunk): Array<[number, number]> => (chunk.row_count === undefined ? [] : [[chunk.chunk_index, chunk.row_count]]));
+  const rowCounts = (statement.manifest?.chunks ?? []).flatMap(
+    (chunk): Array<[number, number]> => (chunk.row_count === undefined ? [] : [[chunk.chunk_index, chunk.row_count]]),
+  );
   return {
     columns: statement.manifest?.schema?.columns ?? [],
     chunkCount: statement.manifest?.total_chunk_count ?? 0,
@@ -224,7 +226,11 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? defaultSleep;
 
-  async function shape(statement: ApiStatement, rowLimit: number, warehouseId: string | undefined): Promise<StatementResult> {
+  async function shape(
+    statement: ApiStatement,
+    rowLimit: number,
+    warehouseId: string | undefined,
+  ): Promise<StatementResult> {
     const { state } = statement.status;
     const base = { statementId: statement.statement_id, state, ...(warehouseId === undefined ? {} : { warehouseId }) };
     if (state === "FAILED") throw statementError(statement.status);
@@ -250,7 +256,10 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
     const totalRows = statement.manifest?.total_row_count ?? rows.length;
     return {
       ...base,
-      columns: (statement.manifest?.schema?.columns ?? []).map((column) => ({ name: column.name, type: column.type_text })),
+      columns: (statement.manifest?.schema?.columns ?? []).map((column) => ({
+        name: column.name,
+        type: column.type_text,
+      })),
       rows: capped,
       rowCount: capped.length,
       truncated: statement.manifest?.truncated === true || capped.length < totalRows,
@@ -309,18 +318,26 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
     if (state === "FAILED") {
       const error = statementError(check.status);
       if (check.status.error?.message?.includes("PARSE_SYNTAX_ERROR")) {
-        throw new ReadOnlyViolationError(`Read-only mode: the statement is not a query, SHOW, DESCRIBE or EXPLAIN. ${error.message} ${WRITES_HINT} If the statement starts with a comment, remove it.`);
+        throw new ReadOnlyViolationError(
+          `Read-only mode: the statement is not a query, SHOW, DESCRIBE or EXPLAIN. ${error.message} ${WRITES_HINT} If the statement starts with a comment, remove it.`,
+        );
       }
       throw error;
     }
     if (state !== "SUCCEEDED") {
-      throw new SqlError(`Read-only check did not finish (${state}); the warehouse may still be starting, retry in a moment.`);
+      throw new SqlError(
+        `Read-only check did not finish (${state}); the warehouse may still be starting, retry in a moment.`,
+      );
     }
   }
 
   /** Submits the body inline and waits up to 30 s for it; a statement still running is returned with its id and state. */
   async function submitBody(body: StatementBody): Promise<StatementResult> {
-    return shape(await client.post<ApiStatement>(STATEMENTS_PATH, body), body.row_limit ?? DEFAULT_ROW_LIMIT, body.warehouse_id);
+    return shape(
+      await client.post<ApiStatement>(STATEMENTS_PATH, body),
+      body.row_limit ?? DEFAULT_ROW_LIMIT,
+      body.warehouse_id,
+    );
   }
 
   /**
@@ -349,7 +366,9 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
     const result = await submitServerSql(request);
     if (result.state === "PENDING" || result.state === "RUNNING") {
       await cancel(result.statementId).catch(() => undefined);
-      throw new SqlError(`Statement did not finish in time (${result.state}); the warehouse may be starting, retry in a moment.`);
+      throw new SqlError(
+        `Statement did not finish in time (${result.state}); the warehouse may be starting, retry in a moment.`,
+      );
     }
     return result;
   }
@@ -358,7 +377,10 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
    * Starts an export of the full result as EXTERNAL_LINKS and returns without waiting for it. Exports are the agent's
    * statements, so the read-only policy is the same as in {@link submit}. The warehouse is reported to the scope.
    */
-  async function submitExport(request: ExecuteSqlRequest, format: ExportFormat): Promise<{ statementId: string; warehouseId: string }> {
+  async function submitExport(
+    request: ExecuteSqlRequest,
+    format: ExportFormat,
+  ): Promise<{ statementId: string; warehouseId: string }> {
     const { row_limit: _rowLimit, ...inlineBody } = await statementBody(request);
     if (!options.allowWrites) await assertReadOnly(inlineBody);
     const response = await client.post<ApiStatement>(STATEMENTS_PATH, {
@@ -378,10 +400,15 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
    * Fetches a statement. With `waitSeconds` (0 to 30) it polls with waits of 1 s, 2 s, 3 s... until the statement is
    * no longer PENDING or RUNNING or the time is spent; a statement still running is returned as such.
    */
-  async function get(statementId: string, getOptions: { rowLimit?: number; waitSeconds?: number } = {}): Promise<StatementResult> {
+  async function get(
+    statementId: string,
+    getOptions: { rowLimit?: number; waitSeconds?: number } = {},
+  ): Promise<StatementResult> {
     const path = `${STATEMENTS_PATH}/${encodeURIComponent(statementId)}`;
     const requestedSeconds = getOptions.waitSeconds ?? 0;
-    const waitSeconds = Number.isFinite(requestedSeconds) ? Math.min(Math.max(requestedSeconds, 0), MAX_WAIT_SECONDS) : 0;
+    const waitSeconds = Number.isFinite(requestedSeconds)
+      ? Math.min(Math.max(requestedSeconds, 0), MAX_WAIT_SECONDS)
+      : 0;
     const deadline = now() + waitSeconds * 1000;
     let statement = await client.get<ApiStatement>(path);
     for (let attempt = 1; statement.status.state === "PENDING" || statement.status.state === "RUNNING"; attempt++) {

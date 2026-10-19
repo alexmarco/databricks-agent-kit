@@ -31,7 +31,8 @@ export function fakeServices(logs: LogService) {
   const statements = {
     submit: async (request: ExecuteSqlRequest) => {
       sqlRequests.push(request);
-      if (request.statement.startsWith("FAIL")) throw new SqlError("[TABLE_OR_VIEW_NOT_FOUND] missing (SQLSTATE 42P01)");
+      if (request.statement.startsWith("FAIL"))
+        throw new SqlError("[TABLE_OR_VIEW_NOT_FOUND] missing (SQLSTATE 42P01)");
       return okResult;
     },
     get: async (statementId: string, options?: unknown) => {
@@ -44,12 +45,20 @@ export function fakeServices(logs: LogService) {
   } as unknown as StatementLifecycle;
   const warehouses = {
     resolve: async () => "wh1",
-    list: async () => [{ id: "wh1", name: "Serverless", state: "RUNNING", size: "2X-Small", serverless: true, isDefault: true }],
+    list: async () => [
+      { id: "wh1", name: "Serverless", state: "RUNNING", size: "2X-Small", serverless: true, isDefault: true },
+    ],
   } as unknown as WarehouseSelection;
   const metadata = {
     listObjects: async (request: { catalog?: string; schema?: string }) => {
-      if (request.catalog === undefined) return { level: "catalogs", items: [{ name: "main", comment: undefined }], truncated: false };
-      if (request.schema === undefined) return { level: "schemas", items: [{ name: `${request.catalog}-schema`, comment: undefined }], truncated: false };
+      if (request.catalog === undefined)
+        return { level: "catalogs", items: [{ name: "main", comment: undefined }], truncated: false };
+      if (request.schema === undefined)
+        return {
+          level: "schemas",
+          items: [{ name: `${request.catalog}-schema`, comment: undefined }],
+          truncated: false,
+        };
       return { level: "tables", items: [{ name: "orders", type: "MANAGED", comment: "Orders" }], truncated: false };
     },
     describeTable: async (fullName: string, options: { sampleRows?: number; lineage?: boolean } = {}) => ({
@@ -58,7 +67,9 @@ export function fakeServices(logs: LogService) {
       ...(options.sampleRows === undefined ? {} : { sample: okResult }),
       ...(options.lineage === true ? { lineage: { upstream: [], downstream: [] } } : {}),
     }),
-    searchMetadata: async () => [{ kind: "table", catalog: "main", schema: "sales", table: "orders", column: null, comment: null }],
+    searchMetadata: async () => [
+      { kind: "table", catalog: "main", schema: "sales", table: "orders", column: null, comment: null },
+    ],
   } as unknown as MetadataService;
   const exportCalls = {
     start: [] as Array<{ statement: ExecuteSqlRequest; format: ExportFormat; name?: string | undefined }>,
@@ -70,7 +81,13 @@ export function fakeServices(logs: LogService) {
     start: async (request) => {
       exportCalls.start.push(request);
       scope.annotate({ checkMs: 3, warehouseId: "wh-export" });
-      const state: ExportState = { id: "export-1", statementId: "st-export", format: request.format, path: `/exports/export-1.${request.format}`, status: "PENDING" };
+      const state: ExportState = {
+        id: "export-1",
+        statementId: "st-export",
+        format: request.format,
+        path: `/exports/export-1.${request.format}`,
+        status: "PENDING",
+      };
       exportStates.set(state.statementId, state);
       return structuredClone(state);
     },
@@ -90,10 +107,25 @@ export function fakeServices(logs: LogService) {
     close: async () => undefined,
   };
   const workspace = async () => ({ warehouses, statements, metadata, exports });
-  return { workspace, warehouses, statements, metadata, exports, scope, exportStates, sqlRequests, getStatementCalls, cancelledStatements, exportCalls };
+  return {
+    workspace,
+    warehouses,
+    statements,
+    metadata,
+    exports,
+    scope,
+    exportStates,
+    sqlRequests,
+    getStatementCalls,
+    cancelledStatements,
+    exportCalls,
+  };
 }
 
-export async function withLogs<T>(transport: ExecutionTransport, run: (context: { repository: LogRepository; logs: LogService; dir: string }) => Promise<T>): Promise<T> {
+export async function withLogs<T>(
+  transport: ExecutionTransport,
+  run: (context: { repository: LogRepository; logs: LogService; dir: string }) => Promise<T>,
+): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "dak-test-"));
   const repository = await openLogRepository(join(dir, "logs.db"));
   const logs = createLogService({ repository, transport, level: "info" });
