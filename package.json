@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "MCP server that gives coding agents governed SQL and Unity Catalog metadata access to Databricks.",
   "type": "module",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "private": true,
   "bin": {
     "dak": "dist/cli.js"
