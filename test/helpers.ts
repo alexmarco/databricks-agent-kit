@@ -22,7 +22,7 @@ export const okResult: StatementResult = {
   truncated: false,
 };
 
-/** Fake services; `scope` is the execution scope of `logs`, which the fakes use to report diagnostics like the real modules. */
+/** Fake services, handed to the server through `workspace`; `scope` is the execution scope of `logs`, which the fakes use to report diagnostics like the real modules. */
 export function fakeServices(logs: LogService) {
   const scope = createExecutionScope(logs);
   const sqlRequests: ExecuteSqlRequest[] = [];
@@ -89,7 +89,8 @@ export function fakeServices(logs: LogService) {
     cleanup: async () => undefined,
     close: async () => undefined,
   };
-  return { warehouses, statements, metadata, exports, scope, exportStates, sqlRequests, getStatementCalls, cancelledStatements, exportCalls };
+  const workspace = async () => ({ warehouses, statements, metadata, exports });
+  return { workspace, warehouses, statements, metadata, exports, scope, exportStates, sqlRequests, getStatementCalls, cancelledStatements, exportCalls };
 }
 
 export async function withLogs<T>(transport: ExecutionTransport, run: (context: { repository: LogRepository; logs: LogService; dir: string }) => Promise<T>): Promise<T> {

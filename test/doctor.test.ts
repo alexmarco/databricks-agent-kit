@@ -2,7 +2,8 @@ import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ensureWritableDirectory, formatReport, runDoctor, type DoctorDependencies, type DoctorStatements } from "../src/doctor.ts";
+import { ensureWritableDirectory, formatReport, runDoctor, type DoctorConnection, type DoctorDependencies, type DoctorStatements } from "../src/doctor.ts";
+import { createWarehouseSelection } from "../src/warehouses.ts";
 import { withLogs } from "./helpers.ts";
 import type { DatabricksClient } from "../src/client.ts";
 import { DatabricksApiError } from "../src/client.ts";
@@ -67,6 +68,11 @@ function client(failing: Failures = {}): DatabricksClient {
   };
 }
 
+/** What the workspace session gives the doctor: the client, the real warehouse selection on it and the statement seam. */
+function connection(workspaceClient: DatabricksClient, statements: DoctorStatements): DoctorConnection {
+  return { auth, client: workspaceClient, warehouses: createWarehouseSelection(workspaceClient, { defaultWarehouseId: undefined }), statements };
+}
+
 /** Fake statement lifecycle seam for the doctor: every request is recorded. */
 function fakeStatements(failing: Failures = {}) {
   const submitted: Array<{ statement: string; origin: string }> = [];
@@ -119,9 +125,7 @@ function deps(overrides: Partial<DoctorDependencies> = {}, recorder: Recorder = 
   const { statements } = fakeStatements(failing);
   return {
     settings,
-    resolveAuth: async () => auth,
-    createClient: () => client(failing),
-    createStatements: () => statements,
+    connect: async () => connection(client(failing), statements),
     runCli: async () => "Databricks CLI v1.21.0\n",
     openRepository: async () => ({ close: () => undefined }),
     fetch: async (url, init) => {
@@ -159,7 +163,7 @@ test("all checks pass on a healthy workspace", async () => {
 });
 
 test("authentication failure fails and skips the remote checks with a next step", async () => {
-  const checks = await runDoctor(deps({ resolveAuth: async () => { throw new AuthError("No Databricks credentials found. Run `databricks auth login`"); } }));
+  const checks = await runDoctor(deps({ connect: async () => { throw new AuthError("No Databricks credentials found. Run `databricks auth login`"); } }));
   assert.equal(byName(checks, "Authentication")!.status, "fail");
   assert.match(byName(checks, "Authentication")!.detail, /databricks auth login/);
   for (const name of ["Identity", "SQL warehouse", "SQL execution", "information_schema", "Lineage system tables", "Result download"]) {
@@ -173,7 +177,7 @@ test("authentication failure fails and skips the remote checks with a next step"
 test("Result download is skipped when no SQL warehouse is available", async () => {
   const base = client();
   const noWarehouse: DatabricksClient = { ...base, get: async <T>(path: string) => (path === "/api/2.0/sql/warehouses" ? ({ warehouses: [] } as T) : base.get<T>(path)) };
-  const checks = await runDoctor(deps({ createClient: () => noWarehouse }));
+  const checks = await runDoctor(deps({ connect: async () => connection(noWarehouse, fakeStatements().statements) }));
   assert.equal(byName(checks, "SQL warehouse")!.status, "fail");
   assert.equal(byName(checks, "Result download")!.status, "skip");
   assert.match(byName(checks, "Result download")!.detail, /no SQL warehouse/);
@@ -188,7 +192,7 @@ test("Result download is skipped when SQL execution fails", async () => {
 
 test("the probes are server-written SQL on the resolved warehouse", async () => {
   const fake = fakeStatements();
-  await runDoctor(deps({ createStatements: () => fake.statements }));
+  await runDoctor(deps({ connect: async () => connection(client(), fake.statements) }));
   assert.deepEqual(fake.submitted, [
     { statement: "SELECT 1", origin: "server" },
     { statement: "SELECT 1 FROM system.information_schema.tables LIMIT 1", origin: "server" },
@@ -199,7 +203,7 @@ test("the probes are server-written SQL on the resolved warehouse", async () => 
 test("Result download submits SELECT 1 as a CSV export, awaits it and downloads the first link without headers", async () => {
   const recorder: Recorder = { fetchCalls: [] };
   const fake = fakeStatements();
-  const checks = await runDoctor(deps({ createStatements: () => fake.statements }, recorder));
+  const checks = await runDoctor(deps({ connect: async () => connection(client(), fake.statements) }, recorder));
   assert.equal(byName(checks, "Result download")!.status, "ok");
   assert.deepEqual(fake.exportSubmissions, [{ request: { statement: "SELECT 1", warehouseId: "wh1" }, format: "csv" }]);
   assert.equal(fake.awaited.length, 1);
@@ -214,7 +218,7 @@ test("Result download submits SELECT 1 as a CSV export, awaits it and downloads 
 test("Result download asks for the link of chunk 0 when the finished export carries none", async () => {
   const recorder: Recorder = { fetchCalls: [] };
   const fake = fakeStatements({ firstLink: null });
-  const checks = await runDoctor(deps({ createStatements: () => fake.statements }, recorder));
+  const checks = await runDoctor(deps({ connect: async () => connection(client(), fake.statements) }, recorder));
   assert.equal(byName(checks, "Result download")!.status, "ok");
   assert.deepEqual(fake.chunkLinkRequests, [{ statementId: "s", index: 0 }]);
   assert.equal(recorder.fetchCalls[0]!.url, DOWNLOAD_URL);
@@ -256,7 +260,7 @@ async function runWithStuckExport(failing: Failures) {
   const fake = fakeStatements({ ...failing, exportPending: true });
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
-    const running = runDoctor(deps({ createStatements: () => fake.statements }));
+    const running = runDoctor(deps({ connect: async () => connection(client(), fake.statements) }));
     await fake.awaitEntered;
     mock.timers.tick(60_000);
     return { checks: await running, fake };

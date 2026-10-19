@@ -8,17 +8,14 @@ import { Command, Option } from "commander";
 import { defaultAuthDependencies, resolveAuth } from "./auth.ts";
 import { createClient, type ClientDependencies } from "./client.ts";
 import { defaultStorageDir, resolveSettings, type CliFlags, type Settings } from "./config.ts";
-import { ensureWritableDirectory, formatReport, runDoctor } from "./doctor.ts";
-import { createExecutionScope } from "./execution-scope.ts";
-import { cleanupOrphanedParts, createExportManager, type ExportManager } from "./export/manager.ts";
+import { DOCTOR_LIMITS, ensureWritableDirectory, formatReport, runDoctor } from "./doctor.ts";
+import { cleanupOrphanedParts } from "./export/manager.ts";
 import { startHttpServer } from "./http.ts";
 import { openLogRepository } from "./logging/repository.ts";
 import { createRateLimitedLogger } from "./logging/rate-limit.ts";
 import { createLogService } from "./logging/service.ts";
-import { createMetadataService, type MetadataService } from "./metadata.ts";
 import { createMcpServer } from "./server.ts";
-import { createWarehouseSelection, type WarehouseSelection } from "./warehouses.ts";
-import { createStatementLifecycle, type StatementLifecycle } from "./statements.ts";
+import { connectWorkspace, createWorkspaceSession, type WorkspaceAdapters } from "./workspace-session.ts";
 
 const installDir = fileURLToPath(new URL("..", import.meta.url));
 const { version } = JSON.parse(readFileSync(join(installDir, "package.json"), "utf8")) as { version: string };
@@ -36,73 +33,32 @@ const clientDependencies: ClientDependencies = {
 
 const UNAUTHORIZED_LOG_INTERVAL_MS = 60_000;
 
-/** Retries the loader on the next call when it fails, so fixing credentials does not require a restart. */
-function memoizeUntilSuccess<T>(load: () => Promise<T>): () => Promise<T> {
-  let pending: Promise<T> | undefined;
-  return () => {
-    pending ??= load().catch((error: unknown) => {
-      pending = undefined;
-      throw error;
-    });
-    return pending;
-  };
-}
-
-/** Defers every async method call until the real service exists. */
-function lazy<T extends object>(load: () => Promise<T>): T {
-  return new Proxy({} as T, {
-    // `then` must stay undefined or `await proxy` would treat the proxy as a thenable and hang.
-    get: (_target, key) => key === "then" ? undefined : async (...args: unknown[]) => {
-      const target = (await load()) as Record<PropertyKey, (...callArgs: unknown[]) => unknown>;
-      return target[key]!.apply(target, args);
-    },
-  });
-}
-
 function authRequest(settings: Settings) {
   return { profile: settings.profile, explicitProfile: settings.explicitProfile, env: process.env };
+}
+
+/** The real credentials, client, `fetch` and timer behind the workspace session. */
+function workspaceAdapters(settings: Settings): WorkspaceAdapters {
+  return {
+    resolveAuth: (onRefresh) => resolveAuth(authRequest(settings), { ...defaultAuthDependencies(process.env), ...(onRefresh && { onRefresh }) }),
+    createClient: (auth, observers) => createClient(auth, { ...clientDependencies, ...observers }),
+    fetch: clientDependencies.fetch,
+    sleep: clientDependencies.sleep,
+  };
 }
 
 async function runMcp(settings: Settings): Promise<void> {
   const repository = await openLogRepository(join(settings.storageDir, "logs.db"));
   const logs = createLogService({ repository, transport: settings.transport, level: settings.logLevel });
-  const scope = createExecutionScope(logs);
   // Orphan .part files need no credentials, so they are removed at startup without blocking it.
   void cleanupOrphanedParts(settings.exportDir).catch((error: unknown) => logs.lifecycle.warn("Export cleanup failed", { dir: settings.exportDir }, error));
-  // Set once the services exist, so shutdown never triggers credential resolution just to close the exports.
-  let createdExports: ExportManager | undefined;
-  const services = memoizeUntilSuccess(async () => {
-    const auth = await resolveAuth(authRequest(settings), {
-      ...defaultAuthDependencies(process.env),
-      onRefresh: (method) => logs.current().debug("Token refreshed", { method }),
-    });
-    const client = createClient(auth, {
-      ...clientDependencies,
-      onRetry: (event) => logs.current().warn("Databricks request retried", { ...event }),
-      onRequest: (event) => logs.current().debug("Databricks request", { ...event }),
-    });
-    const warehouses = createWarehouseSelection(client, {
-      defaultWarehouseId: settings.warehouseId ?? auth.profileWarehouseId,
-      onWarehouseChosen: (event) => logs.current().info("Warehouse chosen automatically", { ...event }),
-    });
-    logs.lifecycle.info("Databricks credentials resolved", { host: auth.host, method: auth.method });
-    const statements = createStatementLifecycle(client, {
-      maxRows: settings.maxRows,
-      allowWrites: settings.allowWrites,
-      maxResultBytes: 100_000,
-      maxExportBytes: settings.exportMaxBytes,
-      resolveWarehouse: warehouses.resolve,
-      scope,
-    });
-    const exports = createExportManager({ statements, fetch: clientDependencies.fetch, dir: settings.exportDir, scope, sleep: clientDependencies.sleep });
-    createdExports = exports;
-    return { warehouses, statements, metadata: createMetadataService(client, statements), exports };
+  const session = createWorkspaceSession(workspaceAdapters(settings), {
+    warehouseId: settings.warehouseId,
+    limits: { maxRows: settings.maxRows, allowWrites: settings.allowWrites, maxResultBytes: 100_000, maxExportBytes: settings.exportMaxBytes },
+    logs,
+    exportDir: settings.exportDir,
   });
-  const warehouses = lazy<WarehouseSelection>(async () => (await services()).warehouses);
-  const statements = lazy<StatementLifecycle>(async () => (await services()).statements);
-  const metadata = lazy<MetadataService>(async () => (await services()).metadata);
-  const exports = lazy<ExportManager>(async () => (await services()).exports);
-  const factory = () => createMcpServer({ warehouses, statements, metadata, exports, scope, logs, repository, version, allowWrites: settings.allowWrites });
+  const factory = () => createMcpServer({ workspace: session.workspace, scope: session.scope, logs, repository, version, allowWrites: settings.allowWrites });
 
   let stopTransport: () => Promise<void>;
   try {
@@ -132,7 +88,7 @@ async function runMcp(settings: Settings): Promise<void> {
     stopping = true;
     logs.lifecycle.info("Shutting down", { reason });
     await stopTransport().catch(() => undefined);
-    await createdExports?.close().catch(() => undefined);
+    await session.close().catch(() => undefined);
     logs.close();
     process.exit(0);
   };
@@ -146,9 +102,7 @@ async function runMcp(settings: Settings): Promise<void> {
 async function runDoctorCommand(settings: Settings): Promise<number> {
   const checks = await runDoctor({
     settings,
-    resolveAuth: () => resolveAuth(authRequest(settings), defaultAuthDependencies(process.env)),
-    createClient: (auth) => createClient(auth, clientDependencies),
-    createStatements: (client, options) => createStatementLifecycle(client, { ...options, sleep: clientDependencies.sleep }),
+    connect: () => connectWorkspace(workspaceAdapters(settings), { warehouseId: settings.warehouseId, limits: DOCTOR_LIMITS }),
     runCli: (args) => defaultAuthDependencies(process.env).runCli(args),
     openRepository: openLogRepository,
     fetch: clientDependencies.fetch,

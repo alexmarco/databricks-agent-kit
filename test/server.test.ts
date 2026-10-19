@@ -2,14 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
-import { createMcpServer, TOOL_NAMES } from "../src/server.ts";
+import { AuthError } from "../src/errors.ts";
+import { createMcpServer, TOOL_NAMES, type ServerDependencies } from "../src/server.ts";
 import { fakeServices, okResult, withLogs } from "./helpers.ts";
 import type { LogRepository } from "../src/logging/repository.ts";
 import type { LogService } from "../src/logging/service.ts";
 
-async function connect(context: { repository: LogRepository; logs: LogService }) {
+async function connect(context: { repository: LogRepository; logs: LogService }, overrides: Partial<ServerDependencies> = {}) {
   const services = fakeServices(context.logs);
-  const server = createMcpServer({ ...services, logs: context.logs, repository: context.repository, version: "0.0.0-test" });
+  const server = createMcpServer({ ...services, logs: context.logs, repository: context.repository, version: "0.0.0-test", ...overrides });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   const client = new Client({ name: "test-client", version: "1.0.0" });
@@ -333,5 +334,28 @@ test("an unexpected error while reading a log resource is logged on the lifecycl
     assert.equal(errors[0]?.message, "disk gone");
     assert.match(errors[0]?.stackTrace ?? "", /Error: disk gone/);
     await closeAll({ client, server });
+  });
+});
+
+test("a call whose workspace cannot be created returns the error as one warn entry, and the next call succeeds", async () => {
+  await withLogs("stdio", async (context) => {
+    const { workspace } = fakeServices(context.logs);
+    let failures = 1;
+    const connection = await connect(context, {
+      workspace: async () => {
+        if (failures-- > 0) throw new AuthError("No Databricks credentials found. Run `databricks auth login`");
+        return workspace();
+      },
+    });
+    const failed = await connection.client.callTool({ name: "list_objects", arguments: {} });
+    assert.equal(failed.isError, true);
+    assert.match(text(failed), /databricks auth login/);
+    const { execution, logs } = toolLogs(context, "list_objects");
+    assert.equal(execution.status, "failed");
+    assert.deepEqual(logs.map((entry) => entry.level), ["warn"]);
+
+    const retried = await connection.client.callTool({ name: "list_objects", arguments: {} });
+    assert.equal(retried.isError, undefined);
+    await closeAll(connection);
   });
 });
