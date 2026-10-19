@@ -101,6 +101,8 @@ The server sends MCP `instructions` and tool descriptions stating that these too
 
 ### 4.3 SQL execution rules
 
+The **statement lifecycle** module (`src/statements.ts`, ADR 0009, terms in [GLOSSARY.md](../GLOSSARY.md)) owns everything below: it builds the request, applies the read-only policy, submits, polls, cancels and shapes the bounded result. Its interface is `submit(request, origin)` (plain statement; `origin` is `agent` or `server`), `query(request)` (server-written SQL that must finish), `submitExport(request, format)`, `get(statementId, { rowLimit?, waitSeconds? })` and `cancel(statementId)`. The read-only policy is implemented once and applies to the `agent` origin (`execute_sql` and exports); statements the server writes itself (metadata queries, doctor probes) use the `server` origin and skip it. The export manager and the doctor's download check still issue their own statement requests; later slices move them behind this module. Warehouse selection (`src/sql.ts`) is a separate responsibility that the lifecycle module asks for a warehouse id.
+
 - **Read-only by default** (ADR 0008). Anything that is not a plain leading read keyword is analyzed by Databricks itself, so comments, string literals and dialect features need no handling here and nothing is executed:
   1. Statements holding a `;` before their last non-whitespace character are rejected without any call, so the check never submits several statements. Read-only mode cannot tell several statements from a `;` inside a literal; the `Read-only mode` message tells the agent to pass such literals as `:name` parameters. A single trailing `;` is accepted.
   2. Statements starting with `SHOW`, `DESCRIBE`, `DESC` or `EXPLAIN` as a whole word, preceded only by spaces, tabs or line breaks and not followed by a `:` (a SQL-scripting label), are accepted without an extra call. Comments are not skipped, so a statement that starts with a comment goes through `DESCRIBE QUERY`.
@@ -234,13 +236,15 @@ databricks-agent-kit/
     config.ts             # env, profile, options
     auth.ts               # PAT, OAuth M2M, CLI-delegated U2M
     client.ts             # fetch wrapper, retries, error mapping
-    sql.ts                # statement execution, read-only check, result shaping
+    statements.ts         # statement lifecycle: submit, read-only policy, polling, cancel, result shaping (ADR 0009)
+    sql.ts                # warehouse selection: explicit, configured and automatic choice, listing
     metadata.ts           # catalogs, schemas, tables, search, lineage
     export/               # background export jobs: chunk download, csv, parquet, sqlite
     logging/              # log service, queue, batch writer, repository, uuid v7, argument description, rate limiter
     server.ts             # MCP tools, resources, transports
     doctor.ts             # environment checks
   test/                   # node:test
+  GLOSSARY.md             # design vocabulary and the terms of the statement lifecycle module
   docs/design.md
   docs/adr/               # architecture decision records
   README.md

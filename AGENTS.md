@@ -12,6 +12,7 @@ Instructions for coding agents and contributors working on `databricks-agent-kit
 | ---------------- | ------------------------------------------------------------------------- |
 | `src/`           | TypeScript sources (ESM, run with Node.js type stripping, built by `tsc`) |
 | `test/`          | `node:test` suites; `test/integration/` needs a real workspace            |
+| `GLOSSARY.md`    | Design vocabulary and the terms of the statement lifecycle module         |
 | `docs/design.md` | Current design                                                            |
 | `docs/adr/`      | Architecture decision records, indexed in its `README.md`                 |
 
