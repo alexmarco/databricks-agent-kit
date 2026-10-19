@@ -6,18 +6,23 @@ import { describeArguments } from "./logging/arguments.ts";
 import type { LogRepository } from "./logging/repository.ts";
 import type { LogService } from "./logging/service.ts";
 import { createStatementLookup } from "./statement-lookup.ts";
+import type { StatementLifecycle } from "./statements.ts";
 import type { Workspace } from "./workspace-session.ts";
 
 /** Names of every tool the server registers. */
 export const TOOL_NAMES = ["list_objects", "describe_table", "search_metadata", "execute_sql", "get_statement"] as const;
+
+/** The part of the statement lifecycle that runs the agent's statements: always under the read-only policy. */
+export type AgentStatements = Pick<StatementLifecycle, "submit" | "get" | "cancel">;
 
 /** Services behind the MCP tools and resources. */
 export interface ServerDependencies {
   /**
    * The Databricks modules, from the workspace session (ADR 0014). Each tool call and recorded resource read awaits it inside
    * its execution, so a failed credential resolution is the single error of that call and the next call tries again.
+   * The tool handlers receive only the statement methods of the agent: not the ones for server-written SQL (ADR 0015).
    */
-  workspace(): Promise<Pick<Workspace, "warehouses" | "statements" | "metadata" | "exports">>;
+  workspace(): Promise<Pick<Workspace, "warehouses" | "metadata" | "exports"> & { statements: AgentStatements }>;
   /** Opens the execution of each tool call, recorded resource read and export; the services annotate through it. */
   scope: ExecutionScope;
   logs: LogService;
@@ -153,7 +158,7 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     async (args) => {
       const { statements, exports } = await workspace();
       const request = { statement: args.statement, parameters: args.parameters, catalog: args.catalog, schema: args.schema, warehouseId: args.warehouse_id };
-      if (args.export === undefined) return statements.submit({ ...request, rowLimit: args.row_limit }, "agent");
+      if (args.export === undefined) return statements.submit({ ...request, rowLimit: args.row_limit });
       const state = await exports.start({ statement: request, format: args.export.format, name: args.export.name });
       return { statementId: state.statementId, state: "PENDING", export: state };
     },

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ExecutionDiagnostics } from "../src/execution-scope.ts";
-import { createStatementLifecycle, isReadCommand, ReadOnlyViolationError, SqlError, type StatementLifecycleOptions } from "../src/statements.ts";
+import { createStatementLifecycle, isReadCommand, ReadOnlyViolationError, SqlError, type ExecuteSqlRequest, type StatementLifecycleOptions } from "../src/statements.ts";
 import type { DatabricksClient, QueryValue } from "../src/client.ts";
 
 type Handler = (method: "GET" | "POST", path: string, payload: unknown) => unknown;
@@ -93,7 +93,7 @@ test("isReadCommand accepts only a plain leading SHOW, DESCRIBE, DESC or EXPLAIN
 test("submit builds the Statement Execution request", async () => {
   const { client, calls } = fakeClient(() => succeeded([["1", "a"]]));
   const statementsModule = createStatementLifecycle(client, options);
-  await statementsModule.submit({ statement: "SELECT * FROM t WHERE id = :id", parameters: [{ name: "id", value: 7, type: "INT" }], catalog: "main", schema: "default", rowLimit: 10 }, "agent");
+  await statementsModule.submit({ statement: "SELECT * FROM t WHERE id = :id", parameters: [{ name: "id", value: 7, type: "INT" }], catalog: "main", schema: "default", rowLimit: 10 });
   assert.equal(calls[0]!.path, "/api/2.0/sql/statements");
   assert.deepEqual(calls[0]!.payload, {
     statement: "SELECT * FROM t WHERE id = :id",
@@ -120,15 +120,15 @@ test("submit runs on the warehouse that the resolver returns for the requested o
       return explicit ?? "wh-auto";
     },
   });
-  assert.equal((await lifecycle.submit({ statement: "SELECT 1" }, "agent")).warehouseId, "wh-auto");
-  assert.equal((await lifecycle.submit({ statement: "SELECT 1", warehouseId: "explicit" }, "agent")).warehouseId, "explicit");
+  assert.equal((await lifecycle.submit({ statement: "SELECT 1" })).warehouseId, "wh-auto");
+  assert.equal((await lifecycle.submit({ statement: "SELECT 1", warehouseId: "explicit" })).warehouseId, "explicit");
   assert.deepEqual(asked, [undefined, "explicit"]);
   assert.equal((calls.at(-1)!.payload as { warehouse_id: string }).warehouse_id, "explicit");
 });
 
 test("submit shapes a successful result", async () => {
   const { client } = fakeClient(() => succeeded([["1", "a"], ["2", null]]));
-  const result = await createStatementLifecycle(client, options).submit({ statement: "SELECT 1" }, "agent");
+  const result = await createStatementLifecycle(client, options).submit({ statement: "SELECT 1" });
   assert.deepEqual(result, {
     statementId: "st1",
     state: "SUCCEEDED",
@@ -143,15 +143,15 @@ test("submit shapes a successful result", async () => {
 test("row limit defaults to 100 and is capped by maxRows", async () => {
   const { client, calls } = fakeClient(() => succeeded([]));
   const lifecycle = createStatementLifecycle(client, { ...options, maxRows: 500 });
-  await lifecycle.submit({ statement: "SELECT 1" }, "agent");
-  await lifecycle.submit({ statement: "SELECT 1", rowLimit: 10_000 }, "agent");
+  await lifecycle.submit({ statement: "SELECT 1" });
+  await lifecycle.submit({ statement: "SELECT 1", rowLimit: 10_000 });
   assert.equal((calls[0]!.payload as { row_limit: number }).row_limit, 100);
   assert.equal((calls[1]!.payload as { row_limit: number }).row_limit, 500);
 });
 
 test("API truncation is reported", async () => {
   const { client } = fakeClient(() => succeeded([["1", "a"]], { truncated: true }));
-  const result = await createStatementLifecycle(client, options).submit({ statement: "SELECT 1" }, "agent");
+  const result = await createStatementLifecycle(client, options).submit({ statement: "SELECT 1" });
   assert.equal(result.truncated, true);
 });
 
@@ -163,7 +163,7 @@ test("additional chunks are followed until the row limit", async () => {
     if (path.endsWith("/chunks/1")) return { data_array: [["2", "b"]], next_chunk_internal_link: "/api/2.0/sql/statements/st1/result/chunks/2" };
     return { data_array: [["3", "c"]] };
   });
-  const result = await createStatementLifecycle(client, options).submit({ statement: "SELECT 1", rowLimit: 2 }, "agent");
+  const result = await createStatementLifecycle(client, options).submit({ statement: "SELECT 1", rowLimit: 2 });
   assert.deepEqual(result.rows, [["1", "a"], ["2", "b"]]);
   assert.equal(result.truncated, true);
   assert.equal(calls.filter((call) => call.method === "GET").length, 1);
@@ -172,7 +172,7 @@ test("additional chunks are followed until the row limit", async () => {
 test("byte cap trims rows and reports truncation", async () => {
   const rows = Array.from({ length: 50 }, (_, index) => [String(index), "x".repeat(100)]);
   const { client } = fakeClient(() => succeeded(rows));
-  const result = await createStatementLifecycle(client, { ...options, maxResultBytes: 1000 }).submit({ statement: "SELECT 1" }, "agent");
+  const result = await createStatementLifecycle(client, { ...options, maxResultBytes: 1000 }).submit({ statement: "SELECT 1" });
   assert.ok(result.rows!.length < 50);
   assert.ok(JSON.stringify(result.rows).length <= 1000);
   assert.equal(result.truncated, true);
@@ -181,7 +181,7 @@ test("byte cap trims rows and reports truncation", async () => {
 
 test("running statements return the statement id", async () => {
   const { client } = fakeClient(() => ({ statement_id: "st9", status: { state: "RUNNING" } }));
-  const result = await createStatementLifecycle(client, options).submit({ statement: "SELECT 1" }, "agent");
+  const result = await createStatementLifecycle(client, options).submit({ statement: "SELECT 1" });
   assert.equal(result.statementId, "st9");
   assert.equal(result.state, "RUNNING");
   assert.match(result.message ?? "", /get_statement/);
@@ -191,7 +191,7 @@ test("running statements return the statement id", async () => {
 
 test("a statement that ended without a result says so", async () => {
   const { client } = fakeClient(() => ({ statement_id: "st8", status: { state: "CANCELED" } }));
-  const result = await createStatementLifecycle(client, options).submit({ statement: "SELECT 1" }, "agent");
+  const result = await createStatementLifecycle(client, options).submit({ statement: "SELECT 1" });
   assert.equal(result.state, "CANCELED");
   assert.equal(result.message, "Statement is CANCELED; no result is available.");
   assert.equal(result.rows, undefined);
@@ -202,7 +202,7 @@ test("failed statements raise SqlError with SQLSTATE", async () => {
     statement_id: "st2",
     status: { state: "FAILED", error: { error_code: "BAD_REQUEST", message: "[TABLE_OR_VIEW_NOT_FOUND] t", sql_state: "42P01" } },
   }));
-  await assert.rejects(createStatementLifecycle(client, options).submit({ statement: "SELECT * FROM t" }, "agent"), (error: unknown) => {
+  await assert.rejects(createStatementLifecycle(client, options).submit({ statement: "SELECT * FROM t" }), (error: unknown) => {
     assert.ok(error instanceof SqlError);
     assert.match(error.message, /TABLE_OR_VIEW_NOT_FOUND.*SQLSTATE 42P01/);
     return true;
@@ -212,14 +212,14 @@ test("failed statements raise SqlError with SQLSTATE", async () => {
 test("SHOW and EXPLAIN run with a single API call", async () => {
   for (const statement of ["SHOW TABLES", "EXPLAIN SELECT 1", "  \n\tdesc t", "SHOW TABLES;"]) {
     const { client, calls } = warehouse(described("id"));
-    await createStatementLifecycle(client, readOnly).submit({ statement }, "agent");
+    await createStatementLifecycle(client, readOnly).submit({ statement });
     assert.deepEqual(statements(calls), [statement], statement);
   }
 });
 
 test("queries pass DESCRIBE QUERY in the same context and then run", async () => {
   const { client, calls } = warehouse(described("id", "int"));
-  const result = await createStatementLifecycle(client, readOnly).submit({ statement: "SELECT * FROM t WHERE id = :id", parameters: [{ name: "id", value: 7 }], catalog: "main", schema: "s" }, "agent");
+  const result = await createStatementLifecycle(client, readOnly).submit({ statement: "SELECT * FROM t WHERE id = :id", parameters: [{ name: "id", value: 7 }], catalog: "main", schema: "s" });
   assert.deepEqual(result.rows, [["1", "a"]]);
   assert.deepEqual(statements(calls), ["DESCRIBE QUERY SELECT * FROM t WHERE id = :id", "SELECT * FROM t WHERE id = :id"]);
   const check = calls[0]!.payload as Record<string, unknown>;
@@ -229,7 +229,7 @@ test("queries pass DESCRIBE QUERY in the same context and then run", async () =>
 test("statements that only look like reads are rejected and never submitted", async () => {
   for (const statement of ["-- x\rDROP TABLE t /*\nSHOW */", "-- x \\\nSHOW\nDROP TABLE t", "/* /* */ SHOW */ DROP TABLE t", "SHOW: BEGIN SELECT 1 END"]) {
     const { client, calls } = warehouse(notAQuery);
-    await assert.rejects(createStatementLifecycle(client, readOnly).submit({ statement }, "agent"), ReadOnlyViolationError, JSON.stringify(statement));
+    await assert.rejects(createStatementLifecycle(client, readOnly).submit({ statement }), ReadOnlyViolationError, JSON.stringify(statement));
     assert.deepEqual(statements(calls), [`DESCRIBE QUERY ${statement}`], JSON.stringify(statement));
   }
 });
@@ -251,7 +251,7 @@ test("a ';' before the end is rejected in read-only mode without any API call", 
       assert.match(error.message, /several statements or a ';' inside a literal.*:name parameters.*--allow-writes/);
       return true;
     };
-    await assert.rejects(lifecycle.submit({ statement }, "agent"), expected, JSON.stringify(statement));
+    await assert.rejects(lifecycle.submit({ statement }), expected, JSON.stringify(statement));
     await assert.rejects(lifecycle.submitExport({ statement }, "csv"), expected, JSON.stringify(statement));
     assert.equal(calls.length, 0, JSON.stringify(statement));
   }
@@ -260,20 +260,20 @@ test("a ';' before the end is rejected in read-only mode without any API call", 
 test("a single trailing ';' and a ';' inside a parameter value pass the read-only check", async () => {
   for (const request of [{ statement: "SELECT 1;" }, { statement: "SELECT 1 ; \n" }, { statement: "SELECT :p", parameters: [{ name: "p", value: "a;b" }] }]) {
     const { client, calls } = warehouse(described("id"));
-    await createStatementLifecycle(client, readOnly).submit(request, "agent");
+    await createStatementLifecycle(client, readOnly).submit(request);
     assert.deepEqual(statements(calls), [`DESCRIBE QUERY ${request.statement}`, request.statement]);
   }
 });
 
 test("writes mode runs statements with a ';' before the end unchecked", async () => {
   const { client, calls } = fakeClient(() => succeeded([]));
-  await createStatementLifecycle(client, options).submit({ statement: "SELECT 1; DROP TABLE t" }, "agent");
+  await createStatementLifecycle(client, options).submit({ statement: "SELECT 1; DROP TABLE t" });
   assert.deepEqual(statements(calls), ["SELECT 1; DROP TABLE t"]);
 });
 
 test("a leading comment is rejected with a hint to remove it", async () => {
   const { client, calls } = warehouse(notAQuery);
-  await assert.rejects(createStatementLifecycle(client, readOnly).submit({ statement: "-- c\nSHOW TABLES" }, "agent"), (error: unknown) => {
+  await assert.rejects(createStatementLifecycle(client, readOnly).submit({ statement: "-- c\nSHOW TABLES" }), (error: unknown) => {
     assert.ok(error instanceof ReadOnlyViolationError);
     assert.match(error.message, /PARSE_SYNTAX_ERROR.*--allow-writes.*If the statement starts with a comment, remove it\./);
     return true;
@@ -283,7 +283,7 @@ test("a leading comment is rejected with a hint to remove it", async () => {
 
 test("a parse error in the check is a read-only violation that mentions --allow-writes", async () => {
   const { client, calls } = warehouse(notAQuery);
-  await assert.rejects(createStatementLifecycle(client, readOnly).submit({ statement: "DELETE FROM t" }, "agent"), (error: unknown) => {
+  await assert.rejects(createStatementLifecycle(client, readOnly).submit({ statement: "DELETE FROM t" }), (error: unknown) => {
     assert.ok(error instanceof ReadOnlyViolationError);
     assert.match(error.message, /PARSE_SYNTAX_ERROR.*Syntax error at or near 'TABLE'.*--allow-writes/);
     return true;
@@ -293,7 +293,7 @@ test("a parse error in the check is a read-only violation that mentions --allow-
 
 test("other check failures are SqlError and an unfinished check asks to retry", async () => {
   const missing = warehouse(failed("[TABLE_OR_VIEW_NOT_FOUND] The table `nope` cannot be found.", "42P01"));
-  await assert.rejects(createStatementLifecycle(missing.client, readOnly).submit({ statement: "SELECT * FROM nope" }, "agent"), (error: unknown) => {
+  await assert.rejects(createStatementLifecycle(missing.client, readOnly).submit({ statement: "SELECT * FROM nope" }), (error: unknown) => {
     assert.ok(error instanceof SqlError);
     assert.match(error.message, /^\[BAD_REQUEST\] \[TABLE_OR_VIEW_NOT_FOUND\].*42P01/);
     return true;
@@ -301,16 +301,23 @@ test("other check failures are SqlError and an unfinished check asks to retry", 
   assert.equal(missing.calls.length, 1);
 
   const starting = warehouse({ statement_id: "ck", status: { state: "CANCELED" } });
-  await assert.rejects(createStatementLifecycle(starting.client, readOnly).submit({ statement: "SELECT 1" }, "agent"), /warehouse may still be starting/);
+  await assert.rejects(createStatementLifecycle(starting.client, readOnly).submit({ statement: "SELECT 1" }), /warehouse may still be starting/);
 });
 
 test("writes mode and server-written SQL skip the read-only check", async () => {
   const writes = fakeClient(() => succeeded([]));
-  await createStatementLifecycle(writes.client, options).submit({ statement: "DELETE FROM t" }, "agent");
+  await createStatementLifecycle(writes.client, options).submit({ statement: "DELETE FROM t" });
   assert.deepEqual(statements(writes.calls), ["DELETE FROM t"]);
   const internal = fakeClient(() => succeeded([]));
-  await createStatementLifecycle(internal.client, readOnly).submit({ statement: "SELECT 1 FROM system.information_schema.tables" }, "server");
+  await createStatementLifecycle(internal.client, readOnly).submitServerSql({ statement: "SELECT 1 FROM system.information_schema.tables" });
   assert.equal(internal.calls.length, 1);
+});
+
+test("submit always applies the read-only policy: no argument turns it off", async () => {
+  const { client, calls } = fakeClient(() => succeeded([]));
+  const submit = createStatementLifecycle(client, readOnly).submit as (request: ExecuteSqlRequest, ...ignored: unknown[]) => Promise<unknown>;
+  await assert.rejects(submit({ statement: "SELECT 1; DROP TABLE t" }, "server"), ReadOnlyViolationError);
+  assert.equal(calls.length, 0);
 });
 
 /** Scope that records what the lifecycle reports for the final log entry. */
@@ -323,20 +330,20 @@ test("submit reports the duration of the read-only check to the scope", async ()
   let clock = 1000;
   const { client } = warehouse(described("id"));
   const { scope, reported } = recordingScope();
-  await createStatementLifecycle(client, { ...readOnly, scope, now: () => (clock += 7) }).submit({ statement: "SELECT 1" }, "agent");
+  await createStatementLifecycle(client, { ...readOnly, scope, now: () => (clock += 7) }).submit({ statement: "SELECT 1" });
   assert.deepEqual(reported(), { checkMs: 7 });
 });
 
 test("submit reports nothing when no check ran", async () => {
   const { client } = warehouse(described("id"));
   const fast = recordingScope();
-  await createStatementLifecycle(client, { ...readOnly, scope: fast.scope }).submit({ statement: "SHOW TABLES" }, "agent");
+  await createStatementLifecycle(client, { ...readOnly, scope: fast.scope }).submit({ statement: "SHOW TABLES" });
   assert.deepEqual(fast.reported(), {});
   const writes = recordingScope();
-  await createStatementLifecycle(client, { ...options, scope: writes.scope }).submit({ statement: "SELECT 1" }, "agent");
+  await createStatementLifecycle(client, { ...options, scope: writes.scope }).submit({ statement: "SELECT 1" });
   assert.deepEqual(writes.reported(), {});
   const server = recordingScope();
-  await createStatementLifecycle(client, { ...readOnly, scope: server.scope }).submit({ statement: "SELECT 1" }, "server");
+  await createStatementLifecycle(client, { ...readOnly, scope: server.scope }).submitServerSql({ statement: "SELECT 1" });
   assert.deepEqual(server.reported(), {});
 });
 

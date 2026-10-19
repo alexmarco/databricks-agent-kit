@@ -81,9 +81,6 @@ export interface ExportResultInfo {
   firstLink?: ExportChunkLink | undefined;
 }
 
-/** Who wrote a statement: only the agent's statements go through the read-only policy. */
-export type StatementOrigin = "agent" | "server";
-
 /** Limits and collaborators of the statement lifecycle module. */
 export interface StatementLifecycleOptions {
   /** Upper bound for any requested row limit. */
@@ -321,19 +318,27 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
     }
   }
 
-  /** Statements of the agent are checked unless writes are allowed; statements the server wrote itself never are. */
-  async function applyPolicy(body: StatementBody, origin: StatementOrigin): Promise<void> {
-    if (origin === "agent" && !options.allowWrites) await assertReadOnly(body);
+  /** Submits the body inline and waits up to 30 s for it; a statement still running is returned with its id and state. */
+  async function submitBody(body: StatementBody): Promise<StatementResult> {
+    return shape(await client.post<ApiStatement>(STATEMENTS_PATH, body), body.row_limit ?? DEFAULT_ROW_LIMIT, body.warehouse_id);
   }
 
   /**
-   * Submits a statement inline and waits up to 30 s for it. A statement still running is returned with its id and state
-   * for {@link get}.
+   * Submits a statement of the agent inline and waits up to 30 s for it. Unless writes are allowed it is checked first
+   * (ADR 0008); no argument skips the check. A statement still running is returned with its id and state for {@link get}.
    */
-  async function submit(request: ExecuteSqlRequest, origin: StatementOrigin): Promise<StatementResult> {
+  async function submit(request: ExecuteSqlRequest): Promise<StatementResult> {
     const body = await statementBody(request);
-    await applyPolicy(body, origin);
-    return shape(await client.post<ApiStatement>(STATEMENTS_PATH, body), body.row_limit ?? DEFAULT_ROW_LIMIT, body.warehouse_id);
+    if (!options.allowWrites) await assertReadOnly(body);
+    return submitBody(body);
+  }
+
+  /**
+   * Submits SQL that the server wrote itself (doctor probes) inline, without the read-only check, and waits up to 30 s
+   * for it. Only code that composes its own SQL gets this method (ADR 0015); a statement still running is returned.
+   */
+  async function submitServerSql(request: ExecuteSqlRequest): Promise<StatementResult> {
+    return submitBody(await statementBody(request));
   }
 
   /**
@@ -341,7 +346,7 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
    * error. The cancel is best effort: its failure must not hide the "did not finish" error.
    */
   async function query(request: ExecuteSqlRequest): Promise<StatementResult> {
-    const result = await submit(request, "server");
+    const result = await submitServerSql(request);
     if (result.state === "PENDING" || result.state === "RUNNING") {
       await cancel(result.statementId).catch(() => undefined);
       throw new SqlError(`Statement did not finish in time (${result.state}); the warehouse may be starting, retry in a moment.`);
@@ -355,7 +360,7 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
    */
   async function submitExport(request: ExecuteSqlRequest, format: ExportFormat): Promise<{ statementId: string; warehouseId: string }> {
     const { row_limit: _rowLimit, ...inlineBody } = await statementBody(request);
-    await applyPolicy(inlineBody, "agent");
+    if (!options.allowWrites) await assertReadOnly(inlineBody);
     const response = await client.post<ApiStatement>(STATEMENTS_PATH, {
       ...inlineBody,
       byte_limit: options.maxExportBytes ?? DEFAULT_EXPORT_BYTE_LIMIT,
@@ -421,7 +426,7 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
     await client.post(`${STATEMENTS_PATH}/${encodeURIComponent(statementId)}/cancel`);
   }
 
-  return { submit, query, submitExport, awaitExport, exportChunkLink, get, cancel };
+  return { submit, submitServerSql, query, submitExport, awaitExport, exportChunkLink, get, cancel };
 }
 
 /** Methods returned by {@link createStatementLifecycle}. */

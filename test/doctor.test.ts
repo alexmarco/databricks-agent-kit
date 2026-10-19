@@ -75,7 +75,7 @@ function connection(workspaceClient: DatabricksClient, statements: DoctorStateme
 
 /** Fake statement lifecycle seam for the doctor: every request is recorded. */
 function fakeStatements(failing: Failures = {}) {
-  const submitted: Array<{ statement: string; origin: string }> = [];
+  const submitted: string[] = [];
   const exportSubmissions: Array<{ request: ExecuteSqlRequest; format: ExportFormat }> = [];
   const awaited: Array<{ statementId: string; signal: AbortSignal }> = [];
   const chunkLinkRequests: Array<{ statementId: string; index: number }> = [];
@@ -85,8 +85,8 @@ function fakeStatements(failing: Failures = {}) {
     enteredAwait = resolve;
   });
   const statements: DoctorStatements = {
-    async submit(request, origin) {
-      submitted.push({ statement: request.statement, origin });
+    async submitServerSql(request) {
+      submitted.push(request.statement);
       if (failing.sqlExecution && request.statement === "SELECT 1") throw new SqlError("[PERMISSION_DENIED] no");
       if (request.statement.includes("table_lineage") && failing.lineage) throw new SqlError("[TABLE_OR_VIEW_NOT_FOUND] system.access.table_lineage");
       if (request.statement.includes("information_schema") && failing.informationSchema) throw new SqlError("[PERMISSION_DENIED] no");
@@ -194,9 +194,9 @@ test("the probes are server-written SQL on the resolved warehouse", async () => 
   const fake = fakeStatements();
   await runDoctor(deps({ connect: async () => connection(client(), fake.statements) }));
   assert.deepEqual(fake.submitted, [
-    { statement: "SELECT 1", origin: "server" },
-    { statement: "SELECT 1 FROM system.information_schema.tables LIMIT 1", origin: "server" },
-    { statement: "SELECT 1 FROM system.access.table_lineage LIMIT 1", origin: "server" },
+    "SELECT 1",
+    "SELECT 1 FROM system.information_schema.tables LIMIT 1",
+    "SELECT 1 FROM system.access.table_lineage LIMIT 1",
   ]);
 });
 

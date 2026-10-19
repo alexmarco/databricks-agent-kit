@@ -121,9 +121,9 @@ test("the workspace limits reach the statement lifecycle", async () => {
   await withLogs("stdio", async ({ logs, dir }) => {
     const { adapters: fake, workspace } = adapters();
     const { statements } = await createWorkspaceSession(fake, sessionOptions(dir, logs)).workspace();
-    await statements.submit({ statement: "SHOW TABLES", rowLimit: 1000 }, "agent");
+    await statements.submit({ statement: "SHOW TABLES", rowLimit: 1000 });
     assert.equal((workspace.calls.find((call) => call.method === "POST")?.body as { row_limit: number }).row_limit, 50);
-    await assert.rejects(statements.submit({ statement: "SELECT 1; DROP TABLE t" }, "agent"), ReadOnlyViolationError);
+    await assert.rejects(statements.submit({ statement: "SELECT 1; DROP TABLE t" }), ReadOnlyViolationError);
   });
 });
 
@@ -149,8 +149,8 @@ test("the credentials, the warehouse choice and the diagnostics of a call reach 
     const session = createWorkspaceSession(fake, sessionOptions(dir, logs));
     const { statements } = await session.workspace();
     await session.scope.run({ toolName: "execute_sql" }, async () => {
-      await statements.submit({ statement: "SELECT 1" }, "agent");
-      await statements.submit({ statement: "SELECT 2" }, "agent");
+      await statements.submit({ statement: "SELECT 1" });
+      await statements.submit({ statement: "SELECT 2" });
     }, { message: "Tool call completed" });
 
     logs.flush();
@@ -191,7 +191,7 @@ test("connecting without a log service resolves the credentials and builds the m
   assert.deepEqual(state.observers, {});
   assert.equal(state.onRefresh, undefined);
   assert.equal(await connection.warehouses.resolve(), "wh-auto");
-  const result = await connection.statements.submit({ statement: "SELECT 1", rowLimit: 1 }, "server");
+  const result = await connection.statements.submitServerSql({ statement: "SELECT 1", rowLimit: 1 });
   assert.equal(result.state, "SUCCEEDED");
 });
 

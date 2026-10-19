@@ -8,7 +8,7 @@ import type { WarehouseSelection } from "./warehouses.ts";
 import type { WorkspaceConnection, WorkspaceLimits } from "./workspace-session.ts";
 
 /** The part of the statement lifecycle that the doctor uses. */
-export type DoctorStatements = Pick<StatementLifecycle, "submit" | "submitExport" | "awaitExport" | "exportChunkLink" | "cancel">;
+export type DoctorStatements = Pick<StatementLifecycle, "submitServerSql" | "submitExport" | "awaitExport" | "exportChunkLink" | "cancel">;
 
 /** The doctor's smaller limits for the workspace session: a probe returns at most 10 rows and nothing writes. */
 export const DOCTOR_LIMITS: WorkspaceLimits = { maxRows: 10, allowWrites: false, maxResultBytes: 10_000 };
@@ -66,7 +66,7 @@ export async function ensureWritableDirectory(dir: string): Promise<void> {
 }
 
 async function probe(statements: DoctorStatements, statement: string, warehouseId: string): Promise<void> {
-  await statements.submit({ statement, warehouseId, rowLimit: 1 }, "server");
+  await statements.submitServerSql({ statement, warehouseId, rowLimit: 1 });
 }
 
 /**
@@ -135,7 +135,7 @@ async function remoteChecks(deps: DoctorDependencies, { client, warehouses, stat
 
   let sqlExecutionFailed = false;
   try {
-    const result = await statements.submit({ statement: "SELECT 1", warehouseId, rowLimit: 1 }, "server");
+    const result = await statements.submitServerSql({ statement: "SELECT 1", warehouseId, rowLimit: 1 });
     checks.push(
       result.state === "SUCCEEDED"
         ? { name: "SQL execution", status: "ok", detail: "SELECT 1 succeeded" }
