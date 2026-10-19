@@ -6,14 +6,17 @@ import { describeArguments } from "./logging/arguments.ts";
 import type { LogRepository } from "./logging/repository.ts";
 import type { LogService } from "./logging/service.ts";
 import type { MetadataService } from "./metadata.ts";
-import type { ExecutionDiagnostics, SqlService } from "./sql.ts";
+import type { SqlService } from "./sql.ts";
+import type { ExecutionDiagnostics, StatementLifecycle } from "./statements.ts";
 
 /** Names of every tool the server registers. */
 export const TOOL_NAMES = ["list_objects", "describe_table", "search_metadata", "execute_sql", "get_statement"] as const;
 
 /** Services behind the MCP tools and resources. */
 export interface ServerDependencies {
+  /** Warehouse selection: the warehouses resource. */
   sql: SqlService;
+  statements: StatementLifecycle;
   metadata: MetadataService;
   exports: ExportManager;
   logs: LogService;
@@ -56,7 +59,7 @@ function summarize(result: unknown): Record<string, unknown> {
  * report; an unexpected error while reading them is logged on the lifecycle execution.
  */
 export function createMcpServer(deps: ServerDependencies): McpServer {
-  const { sql, metadata, exports, logs, repository } = deps;
+  const { sql, statements, metadata, exports, logs, repository } = deps;
   const server = new McpServer({ name: "databricks-agent-kit", version: deps.version }, { instructions: INSTRUCTIONS });
 
   function tool<Schema extends z.ZodObject>(
@@ -157,7 +160,7 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     }),
     async (args, diagnostics) => {
       const request = { statement: args.statement, parameters: args.parameters, catalog: args.catalog, schema: args.schema, warehouseId: args.warehouse_id };
-      if (args.export === undefined) return sql.executeSql({ ...request, rowLimit: args.row_limit }, diagnostics);
+      if (args.export === undefined) return statements.submit({ ...request, rowLimit: args.row_limit }, "agent", diagnostics);
       const state = await exports.start({ statement: request, format: args.export.format, name: args.export.name }, diagnostics);
       return { statementId: state.statementId, state: "PENDING", export: state };
     },
@@ -171,13 +174,13 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
       const waitSeconds = args.wait_seconds ?? 0;
       if (args.cancel === true) {
         // The export manager cancels the Databricks statement of a running export itself.
-        if ((await exports.get(statementId)) === undefined) await sql.cancelStatement(statementId);
+        if ((await exports.get(statementId)) === undefined) await statements.cancel(statementId);
         else if (!(await exports.cancel(statementId))) return { statementId, cancelled: false, export: await exports.get(statementId) };
         return { statementId, cancelled: true };
       }
       const exported = await exports.get(statementId);
       if (exported !== undefined) return { statementId, export: waitSeconds > 0 ? await exports.wait(statementId, waitSeconds * 1000) : exported };
-      return sql.getStatement(statementId, { waitSeconds: args.wait_seconds });
+      return statements.get(statementId, { waitSeconds: args.wait_seconds });
     },
   );
 

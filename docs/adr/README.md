@@ -14,5 +14,6 @@ Possible statuses: Proposed, Accepted, Superseded.
 | [0006](0006-minimal-mcp-surface.md)        | Minimal MCP surface of 5 tools                | Accepted |
 | [0007](0007-logging-policy.md)             | Logging policy                                | Accepted |
 | [0008](0008-simplified-read-only-check.md) | Simplified read-only check                    | Accepted |
+| [0009](0009-statement-lifecycle-module.md) | Statement lifecycle module                    | Accepted |
 
 Current design: [docs/design.md](../design.md).

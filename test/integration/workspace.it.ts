@@ -16,7 +16,8 @@ import type { ExportFormat, ExportState } from "../../src/export/types.ts";
 import { openLogRepository } from "../../src/logging/repository.ts";
 import { createLogService } from "../../src/logging/service.ts";
 import { createMetadataService } from "../../src/metadata.ts";
-import { createSqlService, ReadOnlyViolationError, type StatementResult } from "../../src/sql.ts";
+import { createSqlService } from "../../src/sql.ts";
+import { createStatementLifecycle, ReadOnlyViolationError, type StatementResult } from "../../src/statements.ts";
 
 const profile = process.env.DAK_IT_PROFILE;
 if (profile === undefined || profile === "") {
@@ -35,23 +36,24 @@ const MULTI_STATEMENT_REJECTIONS = [/PARSE_SYNTAX_ERROR/i, /multiple statements/
 const auth = await resolveAuth({ profile, explicitProfile: true, env: process.env }, defaultAuthDependencies(process.env));
 const clientDependencies: ClientDependencies = { fetch: (input, init) => fetch(input, init), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) };
 const client = createClient(auth, clientDependencies);
-const sqlOptions = { maxRows: 100, defaultWarehouseId: process.env.DATABRICKS_WAREHOUSE_ID ?? auth.profileWarehouseId, maxResultBytes: 100_000 };
-const sql = createSqlService(client, { ...sqlOptions, allowWrites: false });
-const writableSql = createSqlService(client, { ...sqlOptions, allowWrites: true });
-const metadata = createMetadataService(client, sql);
+const sql = createSqlService(client, { defaultWarehouseId: process.env.DATABRICKS_WAREHOUSE_ID ?? auth.profileWarehouseId });
+const statementOptions = { maxRows: 100, maxResultBytes: 100_000, resolveWarehouse: sql.resolveWarehouse };
+const statements = createStatementLifecycle(client, { ...statementOptions, allowWrites: false });
+const writableStatements = createStatementLifecycle(client, { ...statementOptions, allowWrites: true });
+const metadata = createMetadataService(client, statements);
 
 // Exports are built like `dak mcp` builds them (src/cli.ts), writing to a fresh directory.
 const workDir = await mkdtemp(join(tmpdir(), "dak-it-"));
 const exportDir = join(workDir, "exports");
 const logs = createLogService({ repository: await openLogRepository(join(workDir, "logs.db")), transport: "stdio", level: "info" });
-const exports = createExportManager({ client, sql, fetch: clientDependencies.fetch, dir: exportDir, logs, sleep: clientDependencies.sleep });
+const exports = createExportManager({ client, statements, fetch: clientDependencies.fetch, dir: exportDir, logs, sleep: clientDependencies.sleep });
 
 /** Statements started by the export tests; `afterEach` cancels them in Databricks whatever the outcome of the test. */
 const startedStatements = new Set<string>();
 
 afterEach(async () => {
   // Best effort: cancelling a finished statement is harmless, and a failed cancel must not hide the test result.
-  for (const statementId of startedStatements) await sql.cancelStatement(statementId).catch(() => undefined);
+  for (const statementId of startedStatements) await statements.cancel(statementId).catch(() => undefined);
   startedStatements.clear();
 });
 
@@ -81,9 +83,9 @@ const partFiles = async () => (await readdir(exportDir)).filter((entry) => entry
 test("resolves a warehouse and runs SELECT 1", async () => {
   const warehouses = await sql.listWarehouses();
   assert.ok(warehouses.length > 0, "at least one accessible warehouse");
-  const result = await sql.executeSql({ statement: "SELECT 1 AS result" });
+  const result = await statements.submit({ statement: "SELECT 1 AS result" }, "agent");
   if (result.state !== "SUCCEEDED") {
-    const final = await sql.getStatement(result.statementId);
+    const final = await statements.get(result.statementId);
     assert.equal(final.state, "SUCCEEDED");
     return;
   }
@@ -112,15 +114,15 @@ test("lineage returns data or an explicit note when unavailable", async () => {
 });
 
 test("the read-only guard blocks writes before reaching the workspace", async () => {
-  await assert.rejects(sql.executeSql({ statement: `DELETE FROM ${table}` }), /--allow-writes/);
+  await assert.rejects(statements.submit({ statement: `DELETE FROM ${table}` }, "agent"), /--allow-writes/);
 });
 
 test("queries in every read-only form pass DESCRIBE QUERY and run", async () => {
   const queries = [`TABLE ${table}`, "VALUES (1)", `FROM ${table} SELECT *`, "WITH t AS (SELECT 1) SELECT * FROM t", "(SELECT 1)"];
   for (const statement of queries) {
     try {
-      const result = await sql.executeSql({ statement, rowLimit: 1 });
-      if (result.state === "PENDING" || result.state === "RUNNING") await sql.cancelStatement(result.statementId);
+      const result = await statements.submit({ statement, rowLimit: 1 }, "agent");
+      if (result.state === "PENDING" || result.state === "RUNNING") await statements.cancel(result.statementId);
     } catch (error) {
       if (error instanceof ReadOnlyViolationError) {
         assert.fail(`The read-only check rejected the query \`${statement}\`; report it to the maintainer (do not widen the accepted prefixes without them): ${error.message}`);
@@ -142,7 +144,7 @@ function rejectedWith(statement: string, ...types: Array<abstract new (...args: 
 }
 
 test("read-only bypass attempts are rejected", async () => {
-  // isReadCommand (src/sql.ts) fast-paths none of these: they do not start with SHOW, DESCRIBE, DESC or EXPLAIN as a
+  // isReadCommand (src/statements.ts) fast-paths none of these: they do not start with SHOW, DESCRIBE, DESC or EXPLAIN as a
   // whole word after whitespace, or the word is followed by a ':' (a SQL-scripting label), or they hold a ';' before
   // their end. A ';' before the end is rejected locally without any call; the rest reach DESCRIBE QUERY, where a
   // PARSE_SYNTAX_ERROR becomes a ReadOnlyViolationError and any other failure a SqlError.
@@ -158,7 +160,7 @@ test("read-only bypass attempts are rejected", async () => {
     `SHOW CATALOGS; DROP TABLE IF EXISTS ${NEVER_EXISTS}`,
   ];
   for (const statement of rejected) {
-    await assert.rejects(sql.executeSql({ statement }), rejectedWith(statement, ReadOnlyViolationError));
+    await assert.rejects(statements.submit({ statement }, "agent"), rejectedWith(statement, ReadOnlyViolationError));
   }
 });
 
@@ -167,7 +169,7 @@ test("Databricks rejects several statements in one call even with writes enabled
   const adr = "ADR 0008 and the read-only design assume the Statement Execution API rejects several statements in one call; stop and report it to the maintainer.";
   let result: StatementResult;
   try {
-    result = await writableSql.executeSql({ statement });
+    result = await writableStatements.submit({ statement }, "agent");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     assert.ok(
@@ -177,7 +179,7 @@ test("Databricks rejects several statements in one call even with writes enabled
     return;
   }
   if (result.state === "PENDING" || result.state === "RUNNING") {
-    await writableSql.cancelStatement(result.statementId).catch(() => undefined);
+    await writableStatements.cancel(result.statementId).catch(() => undefined);
     assert.fail(`Databricks accepted several statements in one call and was still running them (${result.state}; cancelled now). ${adr}`);
   }
   assert.fail(`Databricks accepted several statements in one call (${JSON.stringify(result)}). ${adr}`);
@@ -234,7 +236,7 @@ test("two exports with the same name started back to back get distinct ids", { t
 test("cancelling an export right after it starts leaves no partial file", { timeout: 5 * 60_000 }, async () => {
   const started = await startExport("SELECT id FROM range(100000000)", "csv", "it-cancel");
   assert.equal(await exports.cancel(started.statementId), true);
-  await sql.cancelStatement(started.statementId);
+  await statements.cancel(started.statementId);
   // The cancel lands while the job still polls the statement, before the sink creates its `.part` file, so the check
   // below is only a safety net; the slow export of test/e2e.test.ts covers the removal of a real `.part` file.
   assert.equal((await exports.get(started.statementId))?.status, "CANCELED");

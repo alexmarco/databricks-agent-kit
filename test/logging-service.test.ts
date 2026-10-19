@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ReadOnlyViolationError } from "../src/sql.ts";
+import { ReadOnlyViolationError } from "../src/statements.ts";
 import { createLogService } from "../src/logging/service.ts";
 import type { LogRepository, QueueEvent } from "../src/logging/repository.ts";
 

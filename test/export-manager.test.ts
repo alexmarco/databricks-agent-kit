@@ -133,7 +133,7 @@ function managerDeps(
   overrides: Partial<ExportManagerDependencies> & Pick<ExportManagerDependencies, "client" | "fetch">,
 ): ExportManagerDependencies {
   return {
-    sql: { submitExport: async () => ({ statementId: STATEMENT_ID, warehouseId: "wh1" }) },
+    statements: { submitExport: async () => ({ statementId: STATEMENT_ID, warehouseId: "wh1" }) },
     dir: join(dir, "exports"),
     logs,
     sleep: async () => undefined,
@@ -764,14 +764,14 @@ test("start passes the caller's diagnostics to submitExport", async () => {
   await withLogs("stdio", async ({ logs, dir }) => {
     const { client } = fakeClient({ chunks: 1 });
     const received: unknown[] = [];
-    const sql = {
+    const statements = {
       submitExport: async (_request: unknown, _format: unknown, diagnostics?: { checkMs?: number; warehouseId?: string }) => {
         received.push(diagnostics);
         if (diagnostics !== undefined) Object.assign(diagnostics, { checkMs: 4, warehouseId: "wh1" });
         return { statementId: STATEMENT_ID, warehouseId: "wh1" };
       },
     };
-    const manager = createExportManager(managerDeps(logs, dir, { client, fetch: fakeFetch().fetch, sql, sinks: { csv: fakeSink().factory } }));
+    const manager = createExportManager(managerDeps(logs, dir, { client, fetch: fakeFetch().fetch, statements, sinks: { csv: fakeSink().factory } }));
     const diagnostics: { checkMs?: number; warehouseId?: string } = {};
     await manager.start(exportRequest(), diagnostics);
     assert.deepEqual(diagnostics, { checkMs: 4, warehouseId: "wh1" });
@@ -801,8 +801,8 @@ test("close cancels the Databricks statement of every running job", async () => 
     // Polls never answer, so both jobs stay PENDING until they are cancelled.
     const client = { host: "https://example.cloud.databricks.com", get: () => new Promise(() => undefined), post: async (path: string) => void posts.push(path) } as unknown as DatabricksClient;
     const ids = ["st-a", "st-b"];
-    const sql = { submitExport: async () => ({ statementId: ids.shift() as string, warehouseId: "wh1" }) };
-    const manager = createExportManager(managerDeps(logs, dir, { client, fetch: hangingFetch().fetch, sql, sinks: { csv: fakeSink().factory } }));
+    const statements = { submitExport: async () => ({ statementId: ids.shift() as string, warehouseId: "wh1" }) };
+    const manager = createExportManager(managerDeps(logs, dir, { client, fetch: hangingFetch().fetch, statements, sinks: { csv: fakeSink().factory } }));
 
     await manager.start({ ...exportRequest(), name: "a" });
     await manager.start({ ...exportRequest(), name: "b" });
