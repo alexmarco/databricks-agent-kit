@@ -112,7 +112,12 @@ export function createExportManager(deps: ExportManagerDependencies): ExportMana
    * Downloads one chunk. An expired link or a 403 gets one fresh link; a network error, 429 or 5xx is retried after
    * the waits of `DOWNLOAD_RETRY_DELAYS_MS`; any other status fails at once. Link URLs carry credentials: never log them.
    */
-  async function downloadChunk(job: Job, execution: ExecutionHandle, index: number, firstLink: ExportChunkLink | undefined): Promise<DownloadedChunk> {
+  async function downloadChunk(
+    job: Job,
+    execution: ExecutionHandle,
+    index: number,
+    firstLink: ExportChunkLink | undefined,
+  ): Promise<DownloadedChunk> {
     const { signal } = job.controller;
     const { statementId } = job.state;
     let link = firstLink ?? (await deps.statements.exportChunkLink(statementId, index, signal));
@@ -143,16 +148,28 @@ export function createExportManager(deps: ExportManagerDependencies): ExportMana
       const retryable = !expired && (status === undefined || status === 429 || status >= 500);
       const delayMs = DOWNLOAD_RETRY_DELAYS_MS[retries];
       if (!retryable || delayMs === undefined) {
-        throw new Error(`Export: chunk ${index} download failed (${reason})${retries > 0 ? ` after ${retries} retries` : ""}.`);
+        throw new Error(
+          `Export: chunk ${index} download failed (${reason})${retries > 0 ? ` after ${retries} retries` : ""}.`,
+        );
       }
       retries += 1;
-      execution.warn("Export chunk download retried", { chunk: index, attempt: retries, delayMs, ...(status === undefined ? { error: reason } : { status }) });
+      execution.warn("Export chunk download retried", {
+        chunk: index,
+        attempt: retries,
+        delayMs,
+        ...(status === undefined ? { error: reason } : { status }),
+      });
       await untilAborted(deps.sleep(delayMs), signal);
     }
   }
 
   /** Downloads every chunk within the look-ahead window and writes them to `sink` strictly in chunk order. */
-  async function transfer(job: Job, execution: ExecutionHandle, result: ExportResultInfo, sink: ChunkSink): Promise<void> {
+  async function transfer(
+    job: Job,
+    execution: ExecutionHandle,
+    result: ExportResultInfo,
+    sink: ChunkSink,
+  ): Promise<void> {
     const { signal } = job.controller;
     const total = result.chunkCount;
     const downloads = new Map<number, Promise<DownloadedChunk>>();
@@ -161,13 +178,20 @@ export function createExportManager(deps: ExportManagerDependencies): ExportMana
     let inFlight = 0;
 
     function startDownloads(): void {
-      while (!signal.aborted && inFlight < concurrency && nextToStart < total && nextToStart < nextToWrite + 2 * concurrency) {
+      while (
+        !signal.aborted &&
+        inFlight < concurrency &&
+        nextToStart < total &&
+        nextToStart < nextToWrite + 2 * concurrency
+      ) {
         const index = nextToStart++;
         inFlight += 1;
-        const download = downloadChunk(job, execution, index, index === 0 ? result.firstLink : undefined).finally(() => {
-          inFlight -= 1;
-          startDownloads();
-        });
+        const download = downloadChunk(job, execution, index, index === 0 ? result.firstLink : undefined).finally(
+          () => {
+            inFlight -= 1;
+            startDownloads();
+          },
+        );
         // Fail fast: the first failed download aborts the job at once, without waiting for its turn in write order.
         download.catch((error: unknown) => abortJob(job, error));
         downloads.set(index, download);
@@ -210,7 +234,11 @@ export function createExportManager(deps: ExportManagerDependencies): ExportMana
     const startedAt = Date.now();
     let sink: ChunkSink | undefined;
     let finishing = false;
-    execution.info("Export started", { format: job.state.format, statementId: job.state.statementId, path: job.state.path });
+    execution.info("Export started", {
+      format: job.state.format,
+      statementId: job.state.statementId,
+      path: job.state.path,
+    });
     try {
       const result = await deps.statements.awaitExport(job.state.statementId, signal);
       const chunksTotal = result.chunkCount;
@@ -225,22 +253,39 @@ export function createExportManager(deps: ExportManagerDependencies): ExportMana
       const { rows, bytes } = job.state.progress;
       const { truncated } = result;
       Object.assign(job.state, { status: "SUCCEEDED", files, rows, bytes, truncated });
-      execution.info("Export finished", { rows, chunks: chunksTotal, bytes, durationMs: Date.now() - startedAt, truncated });
+      execution.info("Export finished", {
+        rows,
+        chunks: chunksTotal,
+        bytes,
+        durationMs: Date.now() - startedAt,
+        truncated,
+      });
     } catch (error) {
       abortJob(job, error);
       // The abort reason is the first failure, which may come from a download other than the one that surfaced here.
       const failure: unknown = finishing ? error : signal.reason;
-      await sink?.abort().catch((abortError: unknown) => execution.warn(`Export partial files not removed: ${messageWithoutUrls((abortError as Error).message)}`));
+      await sink
+        ?.abort()
+        .catch((abortError: unknown) =>
+          execution.warn(`Export partial files not removed: ${messageWithoutUrls((abortError as Error).message)}`),
+        );
       if (job.canceled && !finishing) {
         job.state.status = "CANCELED";
         throw new ExecutionCancelled();
       }
-      Object.assign(job.state, { status: "FAILED", error: messageWithoutUrls(failure instanceof Error ? failure.message : String(failure)) });
+      Object.assign(job.state, {
+        status: "FAILED",
+        error: messageWithoutUrls(failure instanceof Error ? failure.message : String(failure)),
+      });
       throw failure;
     }
   }
 
-  async function start(request: { statement: ExecuteSqlRequest; format: ExportFormat; name?: string }): Promise<ExportState> {
+  async function start(request: {
+    statement: ExecuteSqlRequest;
+    format: ExportFormat;
+    name?: string;
+  }): Promise<ExportState> {
     if (closed) throw shuttingDown();
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const { statementId } = await deps.statements.submitExport(request.statement, request.format);
@@ -267,9 +312,15 @@ export function createExportManager(deps: ExportManagerDependencies): ExportMana
     };
     // runJob sets the final state of its own failures and cancellation, which the scope already logged; this only
     // catches a bug in it, so the job never stays running forever.
-    job.done = deps.scope.run({ toolName: "export" }, (execution) => runJob(job, execution)).catch((error: unknown) => {
-      if (!FINAL_STATUSES.has(job.state.status)) Object.assign(job.state, { status: "FAILED", error: messageWithoutUrls(error instanceof Error ? error.message : String(error)) });
-    });
+    job.done = deps.scope
+      .run({ toolName: "export" }, (execution) => runJob(job, execution))
+      .catch((error: unknown) => {
+        if (!FINAL_STATUSES.has(job.state.status))
+          Object.assign(job.state, {
+            status: "FAILED",
+            error: messageWithoutUrls(error instanceof Error ? error.message : String(error)),
+          });
+      });
     jobs.set(statementId, job);
     return snapshot(job);
   }

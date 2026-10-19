@@ -72,14 +72,19 @@ test("listObjects without arguments lists catalogs and follows pagination", asyn
   const listing = await createMetadataService(client, noStatements).listObjects({});
   assert.deepEqual(listing, {
     level: "catalogs",
-    items: [{ name: "main", comment: "Main" }, { name: "samples", comment: undefined }],
+    items: [
+      { name: "main", comment: "Main" },
+      { name: "samples", comment: undefined },
+    ],
     truncated: false,
   });
   assert.equal(calls[1]!.query?.page_token, "p2");
 });
 
 test("listObjects with a catalog lists schemas", async () => {
-  const { client, calls } = fakeClient({ "/api/2.1/unity-catalog/schemas": { schemas: [{ name: "default", comment: "d" }] } });
+  const { client, calls } = fakeClient({
+    "/api/2.1/unity-catalog/schemas": { schemas: [{ name: "default", comment: "d" }] },
+  });
   const listing = await createMetadataService(client, noStatements).listObjects({ catalog: "main" });
   assert.deepEqual(listing, { level: "schemas", items: [{ name: "default", comment: "d" }], truncated: false });
   assert.equal(calls[0]!.query?.catalog_name, "main");
@@ -97,9 +102,16 @@ const tablesRoute = {
 
 test("listObjects with catalog and schema lists tables and filters by pattern", async () => {
   const { client, calls } = fakeClient(tablesRoute);
-  const listing = await createMetadataService(client, noStatements).listObjects({ catalog: "main", schema: "default", pattern: "ORDER*" });
+  const listing = await createMetadataService(client, noStatements).listObjects({
+    catalog: "main",
+    schema: "default",
+    pattern: "ORDER*",
+  });
   assert.equal(listing.level, "tables");
-  assert.deepEqual(listing.items.map((item) => item.name), ["orders", "order_items"]);
+  assert.deepEqual(
+    listing.items.map((item) => item.name),
+    ["orders", "order_items"],
+  );
   assert.deepEqual(listing.items[0], { name: "orders", type: "MANAGED", comment: "Orders" });
   assert.equal(calls[0]!.query?.schema_name, "default");
   assert.equal(calls[0]!.query?.omit_columns, true);
@@ -107,15 +119,27 @@ test("listObjects with catalog and schema lists tables and filters by pattern", 
 
 test("listObjects cuts at the limit and reports truncation", async () => {
   const { client } = fakeClient(tablesRoute);
-  const listing = await createMetadataService(client, noStatements).listObjects({ catalog: "main", schema: "default", limit: 2 });
+  const listing = await createMetadataService(client, noStatements).listObjects({
+    catalog: "main",
+    schema: "default",
+    limit: 2,
+  });
   assert.equal(listing.items.length, 2);
   assert.equal(listing.truncated, true);
 });
 
 test("listObjects applies the pattern before the limit", async () => {
   const { client } = fakeClient(tablesRoute);
-  const listing = await createMetadataService(client, noStatements).listObjects({ catalog: "main", schema: "default", pattern: "order*", limit: 2 });
-  assert.deepEqual(listing.items.map((item) => item.name), ["orders", "order_items"]);
+  const listing = await createMetadataService(client, noStatements).listObjects({
+    catalog: "main",
+    schema: "default",
+    pattern: "order*",
+    limit: 2,
+  });
+  assert.deepEqual(
+    listing.items.map((item) => item.name),
+    ["orders", "order_items"],
+  );
   assert.equal(listing.truncated, false);
 });
 
@@ -132,7 +156,10 @@ test("listObjects defaults the limit to 100 and caps it at 500", async () => {
 });
 
 test("listObjects rejects a schema without a catalog", async () => {
-  await assert.rejects(createMetadataService(fakeClient({}).client, noStatements).listObjects({ schema: "s" }), InvalidArgumentError);
+  await assert.rejects(
+    createMetadataService(fakeClient({}).client, noStatements).listObjects({ schema: "s" }),
+    InvalidArgumentError,
+  );
 });
 
 test("describeTable returns columns, constraints, clustering, partitions and tags", async () => {
@@ -150,12 +177,27 @@ test("describeTable returns columns, constraints, clustering, partitions and tag
       ],
       table_constraints: [
         { primary_key_constraint: { name: "pk", child_columns: ["order_id"] } },
-        { foreign_key_constraint: { name: "fk", child_columns: ["customer_id"], parent_table: "main.sales.customers", parent_columns: ["id"] } },
+        {
+          foreign_key_constraint: {
+            name: "fk",
+            child_columns: ["customer_id"],
+            parent_table: "main.sales.customers",
+            parent_columns: ["id"],
+          },
+        },
       ],
       properties: { clusteringColumns: '[["customer_id"]]', other: "x" },
     },
   });
-  const { statements, requests } = fakeStatements(() => rowsResult(["column_name", "tag_name", "tag_value"], [[null, "domain", "sales"], ["customer_id", "pii", "true"]]));
+  const { statements, requests } = fakeStatements(() =>
+    rowsResult(
+      ["column_name", "tag_name", "tag_value"],
+      [
+        [null, "domain", "sales"],
+        ["customer_id", "pii", "true"],
+      ],
+    ),
+  );
   const table = await createMetadataService(client, statements).describeTable("main.sales.orders");
   assert.equal(calls[0]!.path, "/api/2.1/unity-catalog/tables/main.sales.orders");
   assert.deepEqual(table, {
@@ -177,7 +219,10 @@ test("describeTable returns columns, constraints, clustering, partitions and tag
   });
   assert.equal(requests.length, 1);
   assert.match(requests[0]!.statement, /information_schema\.table_tags/);
-  assert.deepEqual(requests[0]!.parameters?.map((parameter) => parameter.value), ["main", "sales", "orders"]);
+  assert.deepEqual(
+    requests[0]!.parameters?.map((parameter) => parameter.value),
+    ["main", "sales", "orders"],
+  );
 });
 
 test("describeTable still answers when tags are unavailable", async () => {
@@ -190,7 +235,9 @@ test("describeTable still answers when tags are unavailable", async () => {
 
 test("describeTable reports a tag read that did not finish instead of an empty tag list", async () => {
   const { client } = fakeClient({ "/api/2.1/unity-catalog/tables/main.s.t": { full_name: "main.s.t", columns: [] } });
-  const { statements } = fakeStatements(() => new SqlError("Statement did not finish in time (PENDING); the warehouse may be starting, retry in a moment."));
+  const { statements } = fakeStatements(
+    () => new SqlError("Statement did not finish in time (PENDING); the warehouse may be starting, retry in a moment."),
+  );
   const table = await createMetadataService(client, statements).describeTable("main.s.t");
   assert.equal(table.tags, undefined);
   assert.match(table.notes?.[0] ?? "", /Tags unavailable.*did not finish/);
@@ -200,14 +247,19 @@ const tableRoute = { "/api/2.1/unity-catalog/tables/main.s.t": { full_name: "mai
 
 function describeSql(request: ExecuteSqlRequest): StatementResult {
   if (request.statement.includes("information_schema")) return rowsResult(["column_name", "tag_name", "tag_value"], []);
-  if (request.statement.includes("target_table_full_name = :table")) return rowsResult(["table_name", "last_seen"], [["main.raw.orders", "2026-10-01"]]);
-  if (request.statement.includes("source_table_full_name = :table")) return rowsResult(["table_name", "last_seen"], [["main.gold.revenue", "2026-10-02"]]);
+  if (request.statement.includes("target_table_full_name = :table"))
+    return rowsResult(["table_name", "last_seen"], [["main.raw.orders", "2026-10-01"]]);
+  if (request.statement.includes("source_table_full_name = :table"))
+    return rowsResult(["table_name", "last_seen"], [["main.gold.revenue", "2026-10-02"]]);
   return rowsResult(["a"], [["1"], ["2"]]);
 }
 
 test("describeTable adds a quoted, bounded sample and lineage on request", async () => {
   const { statements, requests } = fakeStatements(describeSql);
-  const table = await createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", { sampleRows: 2, lineage: true });
+  const table = await createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", {
+    sampleRows: 2,
+    lineage: true,
+  });
   assert.deepEqual(table.sample?.rows, [["1"], ["2"]]);
   assert.deepEqual(table.lineage, {
     upstream: [{ table: "main.raw.orders", lastSeen: "2026-10-01" }],
@@ -222,8 +274,13 @@ test("describeTable adds a quoted, bounded sample and lineage on request", async
 
 test("describeTable caps the sample at 100 rows", async () => {
   const { statements, requests } = fakeStatements(describeSql);
-  await createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", { sampleRows: 5000 });
-  assert.equal(requests.find((request) => request.statement.startsWith("SELECT *"))?.statement, "SELECT * FROM `main`.`s`.`t` LIMIT 100");
+  await createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", {
+    sampleRows: 5000,
+  });
+  assert.equal(
+    requests.find((request) => request.statement.startsWith("SELECT *"))?.statement,
+    "SELECT * FROM `main`.`s`.`t` LIMIT 100",
+  );
 });
 
 test("describeTable runs no sample or lineage query unless asked", async () => {
@@ -236,38 +293,69 @@ test("describeTable runs no sample or lineage query unless asked", async () => {
 
 test("describeTable reports unavailable lineage in notes instead of failing", async () => {
   const { statements } = fakeStatements((request) =>
-    request.statement.includes("table_lineage") ? new SqlError("[TABLE_OR_VIEW_NOT_FOUND] system.access.table_lineage (SQLSTATE 42P01)") : describeSql(request),
+    request.statement.includes("table_lineage")
+      ? new SqlError("[TABLE_OR_VIEW_NOT_FOUND] system.access.table_lineage (SQLSTATE 42P01)")
+      : describeSql(request),
   );
-  const table = await createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", { lineage: true });
+  const table = await createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", {
+    lineage: true,
+  });
   assert.equal(table.lineage, undefined);
   assert.match(table.notes?.join("\n") ?? "", /Lineage is unavailable.*system tables/s);
 });
 
 test("describeTable reports a failing sample in notes instead of failing", async () => {
-  const { statements } = fakeStatements((request) => (request.statement.startsWith("SELECT *") ? new SqlError("[INSUFFICIENT_PERMISSIONS] no SELECT") : describeSql(request)));
-  const table = await createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", { sampleRows: 5 });
+  const { statements } = fakeStatements((request) =>
+    request.statement.startsWith("SELECT *")
+      ? new SqlError("[INSUFFICIENT_PERMISSIONS] no SELECT")
+      : describeSql(request),
+  );
+  const table = await createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", {
+    sampleRows: 5,
+  });
   assert.equal(table.sample, undefined);
   assert.match(table.notes?.join("\n") ?? "", /Sample unavailable.*INSUFFICIENT_PERMISSIONS/);
 });
 
 test("describeTable reports a failed lineage statement in notes and keeps the description", async () => {
-  const { statements } = fakeStatements((request) => (request.statement.includes("table_lineage") ? new SqlError("Statement did not finish in time (RUNNING)") : describeSql(request)));
-  const table = await createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", { lineage: true });
+  const { statements } = fakeStatements((request) =>
+    request.statement.includes("table_lineage")
+      ? new SqlError("Statement did not finish in time (RUNNING)")
+      : describeSql(request),
+  );
+  const table = await createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", {
+    lineage: true,
+  });
   assert.equal(table.fullName, "main.s.t");
   assert.equal(table.lineage, undefined);
   assert.match(table.notes?.join("\n") ?? "", /Lineage unavailable: Statement did not finish in time/);
 });
 
 test("describeTable does not hide unexpected lineage failures", async () => {
-  const { statements } = fakeStatements((request) => (request.statement.includes("table_lineage") ? new TypeError("boom") : describeSql(request)));
-  await assert.rejects(createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", { lineage: true }), TypeError);
+  const { statements } = fakeStatements((request) =>
+    request.statement.includes("table_lineage") ? new TypeError("boom") : describeSql(request),
+  );
+  await assert.rejects(
+    createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", { lineage: true }),
+    TypeError,
+  );
 });
 
 test("searchMetadata queries information_schema with a parameterized pattern", async () => {
   const { statements, requests } = fakeStatements(() =>
-    rowsResult(["kind", "catalog", "schema", "table", "column", "comment"], [["table", "main", "sales", "orders", null, "Orders"], ["column", "main", "sales", "orders", "order_total", null]]),
+    rowsResult(
+      ["kind", "catalog", "schema", "table", "column", "comment"],
+      [
+        ["table", "main", "sales", "orders", null, "Orders"],
+        ["column", "main", "sales", "orders", "order_total", null],
+      ],
+    ),
   );
-  const results = await createMetadataService(fakeClient({}).client, statements).searchMetadata({ query: "Order", catalog: "main", limit: 20 });
+  const results = await createMetadataService(fakeClient({}).client, statements).searchMetadata({
+    query: "Order",
+    catalog: "main",
+    limit: 20,
+  });
   assert.deepEqual(results, [
     { kind: "table", catalog: "main", schema: "sales", table: "orders", column: null, comment: "Orders" },
     { kind: "column", catalog: "main", schema: "sales", table: "orders", column: "order_total", comment: null },
@@ -276,11 +364,19 @@ test("searchMetadata queries information_schema with a parameterized pattern", a
   assert.match(request.statement, /system\.information_schema\.tables/);
   assert.match(request.statement, /system\.information_schema\.columns/);
   assert.match(request.statement, /LIMIT 20/);
-  assert.deepEqual(request.parameters, [{ name: "pattern", value: "%order%" }, { name: "catalog", value: "main" }]);
+  assert.deepEqual(request.parameters, [
+    { name: "pattern", value: "%order%" },
+    { name: "catalog", value: "main" },
+  ]);
   assert.equal(request.rowLimit, 20);
 });
 
 test("searchMetadata surfaces a statement that did not finish instead of an empty list", async () => {
-  const { statements } = fakeStatements(() => new SqlError("Statement did not finish in time (RUNNING); the warehouse may be starting, retry in a moment."));
-  await assert.rejects(createMetadataService(fakeClient({}).client, statements).searchMetadata({ query: "order" }), /did not finish/);
+  const { statements } = fakeStatements(
+    () => new SqlError("Statement did not finish in time (RUNNING); the warehouse may be starting, retry in a moment."),
+  );
+  await assert.rejects(
+    createMetadataService(fakeClient({}).client, statements).searchMetadata({ query: "order" }),
+    /did not finish/,
+  );
 });

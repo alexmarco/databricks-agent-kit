@@ -24,10 +24,13 @@ test("dak --help lists the commands and the environment variables", async () => 
 });
 
 test("invalid options fail with exit code 1 and the usage", async () => {
-  await assert.rejects(run(process.execPath, [cliPath, "mcp", "--transport", "sse"]), (error: { code?: number; stderr?: string }) => {
-    assert.equal(error.code, 1);
-    assert.match(error.stderr ?? "", /Allowed choices are stdio, http/);
-    assert.match(error.stderr ?? "", /Usage: dak mcp/);
-    return true;
-  });
+  await assert.rejects(
+    run(process.execPath, [cliPath, "mcp", "--transport", "sse"]),
+    (error: { code?: number; stderr?: string }) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr ?? "", /Allowed choices are stdio, http/);
+      assert.match(error.stderr ?? "", /Usage: dak mcp/);
+      return true;
+    },
+  );
 });

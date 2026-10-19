@@ -80,7 +80,10 @@ test("simultaneous first calls list the warehouses once and report the choice on
     },
     post: async <T>() => ({}) as T,
   };
-  const warehouses = createWarehouseSelection(client, { ...noDefault, onWarehouseChosen: (event) => events.push(event) });
+  const warehouses = createWarehouseSelection(client, {
+    ...noDefault,
+    onWarehouseChosen: (event) => events.push(event),
+  });
   assert.deepEqual(await Promise.all([warehouses.resolve(), warehouses.resolve()]), ["w1", "w1"]);
   assert.equal(listings, 1);
   assert.deepEqual(events, [{ warehouseId: "w1", name: "a", reason: "running" }]);
@@ -100,7 +103,10 @@ test("simultaneous calls share a failed choice, and the next call tries again", 
   };
   const warehouses = createWarehouseSelection(client, noDefault);
   const failures = await Promise.allSettled([warehouses.resolve(), warehouses.resolve()]);
-  assert.deepEqual(failures.map((outcome) => outcome.status), ["rejected", "rejected"]);
+  assert.deepEqual(
+    failures.map((outcome) => outcome.status),
+    ["rejected", "rejected"],
+  );
   assert.equal(listings, 1);
   accessible = [{ id: "w1", name: "a", state: "RUNNING" }];
   assert.equal(await warehouses.resolve(), "w1");
@@ -148,7 +154,14 @@ test("the listing marks the automatic choice as the default when none is configu
     { id: "w3", name: "running", state: "RUNNING", enable_serverless_compute: false },
   ]);
   const listed = await createWarehouseSelection(client, noDefault).list();
-  assert.deepEqual(listed.map((warehouse) => [warehouse.id, warehouse.isDefault]), [["w1", false], ["w2", false], ["w3", true]]);
+  assert.deepEqual(
+    listed.map((warehouse) => [warehouse.id, warehouse.isDefault]),
+    [
+      ["w1", false],
+      ["w2", false],
+      ["w3", true],
+    ],
+  );
 });
 
 test("onWarehouseChosen reports the automatic choice once", async () => {
@@ -157,7 +170,10 @@ test("onWarehouseChosen reports the automatic choice once", async () => {
     { id: "w1", name: "a", state: "STOPPED", enable_serverless_compute: false },
     { id: "w2", name: "b", state: "STOPPED", enable_serverless_compute: true },
   ]);
-  const warehouses = createWarehouseSelection(client, { ...noDefault, onWarehouseChosen: (event) => events.push(event) });
+  const warehouses = createWarehouseSelection(client, {
+    ...noDefault,
+    onWarehouseChosen: (event) => events.push(event),
+  });
   await warehouses.resolve();
   await warehouses.resolve();
   assert.deepEqual(events, [{ warehouseId: "w2", name: "b", reason: "serverless" }]);
@@ -178,10 +194,19 @@ test("onWarehouseChosen reports the running and first reasons", async () => {
   const reasonFor = async (accessible: unknown[]) => {
     const reasons: string[] = [];
     const { client } = fakeClient(accessible);
-    await createWarehouseSelection(client, { ...noDefault, onWarehouseChosen: (event) => reasons.push(event.reason) }).resolve();
+    await createWarehouseSelection(client, {
+      ...noDefault,
+      onWarehouseChosen: (event) => reasons.push(event.reason),
+    }).resolve();
     return reasons;
   };
-  assert.deepEqual(await reasonFor([{ id: "w1", name: "a", state: "STOPPED" }, { id: "w2", name: "b", state: "RUNNING" }]), ["running"]);
+  assert.deepEqual(
+    await reasonFor([
+      { id: "w1", name: "a", state: "STOPPED" },
+      { id: "w2", name: "b", state: "RUNNING" },
+    ]),
+    ["running"],
+  );
   assert.deepEqual(await reasonFor([{ id: "w1", name: "a", state: "STOPPED" }]), ["first"]);
 });
 

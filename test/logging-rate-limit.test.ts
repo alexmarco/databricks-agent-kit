@@ -5,7 +5,11 @@ import { createRateLimitedLogger } from "../src/logging/rate-limit.ts";
 test("emits once per interval and reports how many calls were suppressed", () => {
   let clock = 0;
   const emitted: number[] = [];
-  const log = createRateLimitedLogger((suppressed) => emitted.push(suppressed), 60_000, () => clock);
+  const log = createRateLimitedLogger(
+    (suppressed) => emitted.push(suppressed),
+    60_000,
+    () => clock,
+  );
   for (const time of [0, 10_000, 20_000]) {
     clock = time;
     log();

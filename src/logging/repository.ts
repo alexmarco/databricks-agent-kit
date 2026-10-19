@@ -175,7 +175,9 @@ export async function openLogRepository(path: string): Promise<LogRepository> {
   const db = new Database(path);
   // Owner-only access; SQLite creates the -wal and -shm files with the database file's permissions.
   if (process.platform !== "win32") chmodSync(path, 0o600);
-  db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY;");
+  db.exec(
+    "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY;",
+  );
   db.exec(SCHEMA);
 
   const insertExecution = db.prepare(
@@ -252,7 +254,9 @@ export async function openLogRepository(path: string): Promise<LogRepository> {
     const where = clauses.length === 0 ? "" : `WHERE ${clauses.join(" AND ")}`;
     const limit = Math.max(1, Math.min(Math.trunc(request.limit ?? 100), 1000));
     const total = Number((db.prepare(`SELECT COUNT(*) AS total FROM logs ${where}`).get(...params) as Row).total);
-    const rows = db.prepare(`SELECT * FROM logs ${where} ORDER BY timestamp DESC, id DESC LIMIT ?`).all(...params, limit) as Row[];
+    const rows = db
+      .prepare(`SELECT * FROM logs ${where} ORDER BY timestamp DESC, id DESC LIMIT ?`)
+      .all(...params, limit) as Row[];
     return { results: rows.map(toLogEntry), total };
   }
 
@@ -260,8 +264,13 @@ export async function openLogRepository(path: string): Promise<LogRepository> {
     writeBatch,
     searchLogs,
     recentErrors: (limit) =>
-      (db.prepare("SELECT * FROM logs WHERE level IN ('error', 'fatal') ORDER BY timestamp DESC, id DESC LIMIT ?").all(limit) as Row[]).map(toLogEntry),
-    recentExecutions: (limit) => (db.prepare("SELECT * FROM executions ORDER BY started_at DESC LIMIT ?").all(limit) as Row[]).map(toExecution),
+      (
+        db
+          .prepare("SELECT * FROM logs WHERE level IN ('error', 'fatal') ORDER BY timestamp DESC, id DESC LIMIT ?")
+          .all(limit) as Row[]
+      ).map(toLogEntry),
+    recentExecutions: (limit) =>
+      (db.prepare("SELECT * FROM executions ORDER BY started_at DESC LIMIT ?").all(limit) as Row[]).map(toExecution),
     executionDetail: (executionId) => {
       const row = db.prepare("SELECT * FROM executions WHERE execution_id = ?").get(executionId) as Row | undefined;
       if (row === undefined) return undefined;
@@ -269,8 +278,14 @@ export async function openLogRepository(path: string): Promise<LogRepository> {
       return { execution: toExecution(row), logs: logs.map(toLogEntry) };
     },
     stats: (since) => {
-      const executions = Number((db.prepare("SELECT COUNT(*) AS n FROM executions WHERE started_at >= ?").get(since) as Row).n);
-      const counts = db.prepare("SELECT level, COUNT(*) AS n FROM logs WHERE timestamp >= ? AND level IN ('warn', 'error', 'fatal') GROUP BY level").all(since) as Row[];
+      const executions = Number(
+        (db.prepare("SELECT COUNT(*) AS n FROM executions WHERE started_at >= ?").get(since) as Row).n,
+      );
+      const counts = db
+        .prepare(
+          "SELECT level, COUNT(*) AS n FROM logs WHERE timestamp >= ? AND level IN ('warn', 'error', 'fatal') GROUP BY level",
+        )
+        .all(since) as Row[];
       const count = (level: string) => Number(counts.find((entry) => entry.level === level)?.n ?? 0);
       return { executions, errors: count("error") + count("fatal"), warnings: count("warn") };
     },
@@ -281,7 +296,9 @@ export async function openLogRepository(path: string): Promise<LogRepository> {
     inspect: () => {
       const pragma = (name: string) => Object.values(db.prepare(`PRAGMA ${name}`).get() as Row)[0];
       const names = (type: string) =>
-        (db.prepare("SELECT name FROM sqlite_master WHERE type = ? AND name NOT LIKE 'sqlite_%'").all(type) as Row[]).map((entry) => entry.name as string);
+        (
+          db.prepare("SELECT name FROM sqlite_master WHERE type = ? AND name NOT LIKE 'sqlite_%'").all(type) as Row[]
+        ).map((entry) => entry.name as string);
       return {
         journalMode: String(pragma("journal_mode")),
         synchronous: Number(pragma("synchronous")),

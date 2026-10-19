@@ -8,7 +8,9 @@ interface FetchCall {
   init: RequestInit | undefined;
 }
 
-function deps(overrides: Partial<AuthDependencies> & { config?: string } = {}): AuthDependencies & { fetchCalls: FetchCall[]; cliCalls: string[][] } {
+function deps(
+  overrides: Partial<AuthDependencies> & { config?: string } = {},
+): AuthDependencies & { fetchCalls: FetchCall[]; cliCalls: string[][] } {
   const fetchCalls: FetchCall[] = [];
   const cliCalls: string[][] = [];
   const { config, ...rest } = overrides;
@@ -20,7 +22,11 @@ function deps(overrides: Partial<AuthDependencies> & { config?: string } = {}): 
     },
     runCli: async (args) => {
       cliCalls.push(args);
-      return JSON.stringify({ access_token: "u2m-token", token_type: "Bearer", expiry: new Date(Date.now() + 3600_000).toISOString() });
+      return JSON.stringify({
+        access_token: "u2m-token",
+        token_type: "Bearer",
+        expiry: new Date(Date.now() + 3600_000).toISOString(),
+      });
     },
     now: () => Date.now(),
     fetchCalls,
@@ -32,21 +38,33 @@ function deps(overrides: Partial<AuthDependencies> & { config?: string } = {}): 
 const base = { profile: "DEFAULT", explicitProfile: false };
 
 test("environment PAT wins when no explicit profile", async () => {
-  const auth = await resolveAuth({ ...base, env: { DATABRICKS_HOST: "a.cloud.databricks.com/", DATABRICKS_TOKEN: "dapi1" } }, deps({ config: "[DEFAULT]\nhost=https://b\ntoken=x\n" }));
+  const auth = await resolveAuth(
+    { ...base, env: { DATABRICKS_HOST: "a.cloud.databricks.com/", DATABRICKS_TOKEN: "dapi1" } },
+    deps({ config: "[DEFAULT]\nhost=https://b\ntoken=x\n" }),
+  );
   assert.equal(auth.method, "pat");
   assert.equal(auth.host, "https://a.cloud.databricks.com");
   assert.equal(await auth.getToken(), "dapi1");
 });
 
 test("plain http hosts are rejected except on loopback", async () => {
-  await assert.rejects(resolveAuth({ ...base, env: { DATABRICKS_HOST: "http://a.cloud.databricks.com", DATABRICKS_TOKEN: "t" } }, deps()), /must use https/);
-  const local = await resolveAuth({ ...base, env: { DATABRICKS_HOST: "http://127.0.0.1:8080", DATABRICKS_TOKEN: "t" } }, deps());
+  await assert.rejects(
+    resolveAuth({ ...base, env: { DATABRICKS_HOST: "http://a.cloud.databricks.com", DATABRICKS_TOKEN: "t" } }, deps()),
+    /must use https/,
+  );
+  const local = await resolveAuth(
+    { ...base, env: { DATABRICKS_HOST: "http://127.0.0.1:8080", DATABRICKS_TOKEN: "t" } },
+    deps(),
+  );
   assert.equal(local.host, "http://127.0.0.1:8080");
 });
 
 test("environment M2M requests a client_credentials token and caches it", async () => {
   const d = deps();
-  const auth = await resolveAuth({ ...base, env: { DATABRICKS_HOST: "https://a", DATABRICKS_CLIENT_ID: "id", DATABRICKS_CLIENT_SECRET: "sec" } }, d);
+  const auth = await resolveAuth(
+    { ...base, env: { DATABRICKS_HOST: "https://a", DATABRICKS_CLIENT_ID: "id", DATABRICKS_CLIENT_SECRET: "sec" } },
+    d,
+  );
   assert.equal(auth.method, "oauth-m2m");
   assert.equal(await auth.getToken(), "m2m-token");
   assert.equal(await auth.getToken(), "m2m-token");
@@ -62,7 +80,10 @@ test("environment M2M requests a client_credentials token and caches it", async 
 test("M2M token is refreshed shortly before expiry", async () => {
   let clock = 1_000_000;
   const d = deps({ now: () => clock });
-  const auth = await resolveAuth({ ...base, env: { DATABRICKS_HOST: "https://a", DATABRICKS_CLIENT_ID: "id", DATABRICKS_CLIENT_SECRET: "sec" } }, d);
+  const auth = await resolveAuth(
+    { ...base, env: { DATABRICKS_HOST: "https://a", DATABRICKS_CLIENT_ID: "id", DATABRICKS_CLIENT_SECRET: "sec" } },
+    d,
+  );
   await auth.getToken();
   clock += 3600_000 - 30_000;
   await auth.getToken();
@@ -79,7 +100,10 @@ test("explicit profile ignores environment credentials", async () => {
 });
 
 test("profile with client credentials uses M2M", async () => {
-  const auth = await resolveAuth({ ...base, env: {} }, deps({ config: "[DEFAULT]\nhost=https://p\nclient_id=i\nclient_secret=s\n" }));
+  const auth = await resolveAuth(
+    { ...base, env: {} },
+    deps({ config: "[DEFAULT]\nhost=https://p\nclient_id=i\nclient_secret=s\n" }),
+  );
   assert.equal(auth.method, "oauth-m2m");
 });
 
@@ -93,7 +117,10 @@ test("profile with databricks-cli auth delegates to databricks auth token", asyn
 });
 
 test("profile warehouse_id is exposed", async () => {
-  const auth = await resolveAuth({ ...base, env: {} }, deps({ config: "[DEFAULT]\nhost=https://p\ntoken=t\nwarehouse_id=wh1\n" }));
+  const auth = await resolveAuth(
+    { ...base, env: {} },
+    deps({ config: "[DEFAULT]\nhost=https://p\ntoken=t\nwarehouse_id=wh1\n" }),
+  );
   assert.equal(auth.profileWarehouseId, "wh1");
 });
 
@@ -107,27 +134,55 @@ test("missing credentials explain the manual steps", async () => {
 
 test("unknown profile lists the available ones", async () => {
   await assert.rejects(
-    resolveAuth({ profile: "nope", explicitProfile: true, env: {} }, deps({ config: "[DEFAULT]\nhost=h\ntoken=t\n[dev]\nhost=h\ntoken=t\n" })),
+    resolveAuth(
+      { profile: "nope", explicitProfile: true, env: {} },
+      deps({ config: "[DEFAULT]\nhost=h\ntoken=t\n[dev]\nhost=h\ntoken=t\n" }),
+    ),
     /nope.*DEFAULT, dev/s,
   );
 });
 
 test("profile without supported credentials is rejected", async () => {
-  await assert.rejects(resolveAuth({ ...base, env: {} }, deps({ config: "[DEFAULT]\nhost=h\nauth_type=azure-cli\n" })), /azure-cli/);
+  await assert.rejects(
+    resolveAuth({ ...base, env: {} }, deps({ config: "[DEFAULT]\nhost=h\nauth_type=azure-cli\n" })),
+    /azure-cli/,
+  );
   await assert.rejects(resolveAuth({ ...base, env: {} }, deps({ config: "[DEFAULT]\ntoken=t\n" })), /host/);
 });
 
 test("CLI failures become actionable AuthErrors without leaking output tokens", async () => {
   const notFound = Object.assign(new Error("spawn databricks ENOENT"), { code: "ENOENT" });
-  const auth = await resolveAuth({ ...base, env: {} }, deps({ config: "[DEFAULT]\nhost=h\nauth_type=databricks-cli\n", runCli: async () => { throw notFound; } }));
+  const auth = await resolveAuth(
+    { ...base, env: {} },
+    deps({
+      config: "[DEFAULT]\nhost=h\nauth_type=databricks-cli\n",
+      runCli: async () => {
+        throw notFound;
+      },
+    }),
+  );
   await assert.rejects(auth.getToken(), /Databricks CLI not found/);
-  const auth2 = await resolveAuth({ ...base, env: {} }, deps({ config: "[DEFAULT]\nhost=h\nauth_type=databricks-cli\n", runCli: async () => { throw Object.assign(new Error("exit 1"), { stderr: "cache: token expired" }); } }));
+  const auth2 = await resolveAuth(
+    { ...base, env: {} },
+    deps({
+      config: "[DEFAULT]\nhost=h\nauth_type=databricks-cli\n",
+      runCli: async () => {
+        throw Object.assign(new Error("exit 1"), { stderr: "cache: token expired" });
+      },
+    }),
+  );
   await assert.rejects(auth2.getToken(), /databricks auth login --profile DEFAULT/);
 });
 
 test("M2M token endpoint failure is an AuthError without the secret", async () => {
   const d = deps({ fetch: async () => new Response("invalid_client", { status: 401 }) });
-  const auth = await resolveAuth({ ...base, env: { DATABRICKS_HOST: "https://a", DATABRICKS_CLIENT_ID: "id", DATABRICKS_CLIENT_SECRET: "topsecret" } }, d);
+  const auth = await resolveAuth(
+    {
+      ...base,
+      env: { DATABRICKS_HOST: "https://a", DATABRICKS_CLIENT_ID: "id", DATABRICKS_CLIENT_SECRET: "topsecret" },
+    },
+    d,
+  );
   await assert.rejects(auth.getToken(), (error: unknown) => {
     assert.ok(error instanceof AuthError);
     assert.doesNotMatch(error.message, /topsecret/);
@@ -151,7 +206,10 @@ test("onRefresh is called once per fetched U2M token and not on cache hits", asy
   const refreshed: string[] = [];
   const auth = await resolveAuth(
     { ...base, env: {} },
-    deps({ config: "[DEFAULT]\nhost = https://dev.example\nauth_type = databricks-cli\n", onRefresh: (method) => refreshed.push(method) }),
+    deps({
+      config: "[DEFAULT]\nhost = https://dev.example\nauth_type = databricks-cli\n",
+      onRefresh: (method) => refreshed.push(method),
+    }),
   );
   await auth.getToken();
   await auth.getToken();
@@ -161,7 +219,11 @@ test("onRefresh is called once per fetched U2M token and not on cache hits", asy
 test("a throwing onRefresh hook never breaks token retrieval", async () => {
   const auth = await resolveAuth(
     { ...base, env: { DATABRICKS_HOST: "https://a", DATABRICKS_CLIENT_ID: "id", DATABRICKS_CLIENT_SECRET: "sec" } },
-    deps({ onRefresh: () => { throw new Error("hook failed"); } }),
+    deps({
+      onRefresh: () => {
+        throw new Error("hook failed");
+      },
+    }),
   );
   assert.equal(await auth.getToken(), "m2m-token");
 });

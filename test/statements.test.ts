@@ -1,7 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ExecutionDiagnostics } from "../src/execution-scope.ts";
-import { createStatementLifecycle, isReadCommand, ReadOnlyViolationError, SqlError, type ExecuteSqlRequest, type StatementLifecycleOptions } from "../src/statements.ts";
+import {
+  createStatementLifecycle,
+  isReadCommand,
+  ReadOnlyViolationError,
+  SqlError,
+  type ExecuteSqlRequest,
+  type StatementLifecycleOptions,
+} from "../src/statements.ts";
 import type { DatabricksClient, QueryValue } from "../src/client.ts";
 
 type Handler = (method: "GET" | "POST", path: string, payload: unknown) => unknown;
@@ -26,7 +33,12 @@ const succeeded = (rows: Array<Array<string | null>>, extra: Record<string, unkn
   statement_id: "st1",
   status: { state: "SUCCEEDED" },
   manifest: {
-    schema: { columns: [{ name: "id", type_text: "INT", position: 0 }, { name: "name", type_text: "STRING", position: 1 }] },
+    schema: {
+      columns: [
+        { name: "id", type_text: "INT", position: 0 },
+        { name: "name", type_text: "STRING", position: 1 },
+      ],
+    },
     total_row_count: rows.length,
     truncated: false,
     ...extra,
@@ -43,9 +55,19 @@ const options: StatementLifecycleOptions = {
 const readOnly = { ...options, allowWrites: false };
 
 /** Response of a finished DESCRIBE QUERY check, whose rows hold the columns of the query. */
-const described = (...rows: string[]) => ({ statement_id: "ds", status: { state: "SUCCEEDED" }, result: { data_array: rows.map((row) => [row]) } });
+const described = (...rows: string[]) => ({
+  statement_id: "ds",
+  status: { state: "SUCCEEDED" },
+  result: { data_array: rows.map((row) => [row]) },
+});
 
-const failed = (message: string, sqlState?: string) => ({ statement_id: "ck", status: { state: "FAILED", error: { error_code: "BAD_REQUEST", message, ...(sqlState === undefined ? {} : { sql_state: sqlState }) } } });
+const failed = (message: string, sqlState?: string) => ({
+  statement_id: "ck",
+  status: {
+    state: "FAILED",
+    error: { error_code: "BAD_REQUEST", message, ...(sqlState === undefined ? {} : { sql_state: sqlState }) },
+  },
+});
 const notAQuery = failed("[PARSE_SYNTAX_ERROR] Syntax error at or near 'TABLE'.", "42601");
 
 /** Fake warehouse: answers DESCRIBE QUERY checks with the given response and runs everything else. */
@@ -56,10 +78,19 @@ function warehouse(check: unknown) {
     return succeeded([["1", "a"]]);
   });
 }
-const statements = (calls: Array<{ payload: unknown }>) => calls.map((call) => (call.payload as { statement: string }).statement);
+const statements = (calls: Array<{ payload: unknown }>) =>
+  calls.map((call) => (call.payload as { statement: string }).statement);
 
 test("isReadCommand accepts only a plain leading SHOW, DESCRIBE, DESC or EXPLAIN", () => {
-  for (const statement of ["SHOW TABLES", "  \n\tdesc t", "EXPLAIN SELECT 1", "SHOW TABLES;", "SHOW TABLES ; \n", "SHOW", "show\r\ntables"]) {
+  for (const statement of [
+    "SHOW TABLES",
+    "  \n\tdesc t",
+    "EXPLAIN SELECT 1",
+    "SHOW TABLES;",
+    "SHOW TABLES ; \n",
+    "SHOW",
+    "show\r\ntables",
+  ]) {
     assert.equal(isReadCommand(statement), true, JSON.stringify(statement));
   }
   for (const statement of [
@@ -93,7 +124,13 @@ test("isReadCommand accepts only a plain leading SHOW, DESCRIBE, DESC or EXPLAIN
 test("submit builds the Statement Execution request", async () => {
   const { client, calls } = fakeClient(() => succeeded([["1", "a"]]));
   const statementsModule = createStatementLifecycle(client, options);
-  await statementsModule.submit({ statement: "SELECT * FROM t WHERE id = :id", parameters: [{ name: "id", value: 7, type: "INT" }], catalog: "main", schema: "default", rowLimit: 10 });
+  await statementsModule.submit({
+    statement: "SELECT * FROM t WHERE id = :id",
+    parameters: [{ name: "id", value: 7, type: "INT" }],
+    catalog: "main",
+    schema: "default",
+    rowLimit: 10,
+  });
   assert.equal(calls[0]!.path, "/api/2.0/sql/statements");
   assert.deepEqual(calls[0]!.payload, {
     statement: "SELECT * FROM t WHERE id = :id",
@@ -127,14 +164,25 @@ test("submit runs on the warehouse that the resolver returns for the requested o
 });
 
 test("submit shapes a successful result", async () => {
-  const { client } = fakeClient(() => succeeded([["1", "a"], ["2", null]]));
+  const { client } = fakeClient(() =>
+    succeeded([
+      ["1", "a"],
+      ["2", null],
+    ]),
+  );
   const result = await createStatementLifecycle(client, options).submit({ statement: "SELECT 1" });
   assert.deepEqual(result, {
     statementId: "st1",
     state: "SUCCEEDED",
     warehouseId: "wh-default",
-    columns: [{ name: "id", type: "INT" }, { name: "name", type: "STRING" }],
-    rows: [["1", "a"], ["2", null]],
+    columns: [
+      { name: "id", type: "INT" },
+      { name: "name", type: "STRING" },
+    ],
+    rows: [
+      ["1", "a"],
+      ["2", null],
+    ],
     rowCount: 2,
     truncated: false,
   });
@@ -160,11 +208,15 @@ test("additional chunks are followed until the row limit", async () => {
   (first.result as Record<string, unknown>).next_chunk_internal_link = "/api/2.0/sql/statements/st1/result/chunks/1";
   const { client, calls } = fakeClient((method, path) => {
     if (method === "POST") return first;
-    if (path.endsWith("/chunks/1")) return { data_array: [["2", "b"]], next_chunk_internal_link: "/api/2.0/sql/statements/st1/result/chunks/2" };
+    if (path.endsWith("/chunks/1"))
+      return { data_array: [["2", "b"]], next_chunk_internal_link: "/api/2.0/sql/statements/st1/result/chunks/2" };
     return { data_array: [["3", "c"]] };
   });
   const result = await createStatementLifecycle(client, options).submit({ statement: "SELECT 1", rowLimit: 2 });
-  assert.deepEqual(result.rows, [["1", "a"], ["2", "b"]]);
+  assert.deepEqual(result.rows, [
+    ["1", "a"],
+    ["2", "b"],
+  ]);
   assert.equal(result.truncated, true);
   assert.equal(calls.filter((call) => call.method === "GET").length, 1);
 });
@@ -172,7 +224,9 @@ test("additional chunks are followed until the row limit", async () => {
 test("byte cap trims rows and reports truncation", async () => {
   const rows = Array.from({ length: 50 }, (_, index) => [String(index), "x".repeat(100)]);
   const { client } = fakeClient(() => succeeded(rows));
-  const result = await createStatementLifecycle(client, { ...options, maxResultBytes: 1000 }).submit({ statement: "SELECT 1" });
+  const result = await createStatementLifecycle(client, { ...options, maxResultBytes: 1000 }).submit({
+    statement: "SELECT 1",
+  });
   assert.ok(result.rows!.length < 50);
   assert.ok(JSON.stringify(result.rows).length <= 1000);
   assert.equal(result.truncated, true);
@@ -200,13 +254,19 @@ test("a statement that ended without a result says so", async () => {
 test("failed statements raise SqlError with SQLSTATE", async () => {
   const { client } = fakeClient(() => ({
     statement_id: "st2",
-    status: { state: "FAILED", error: { error_code: "BAD_REQUEST", message: "[TABLE_OR_VIEW_NOT_FOUND] t", sql_state: "42P01" } },
+    status: {
+      state: "FAILED",
+      error: { error_code: "BAD_REQUEST", message: "[TABLE_OR_VIEW_NOT_FOUND] t", sql_state: "42P01" },
+    },
   }));
-  await assert.rejects(createStatementLifecycle(client, options).submit({ statement: "SELECT * FROM t" }), (error: unknown) => {
-    assert.ok(error instanceof SqlError);
-    assert.match(error.message, /TABLE_OR_VIEW_NOT_FOUND.*SQLSTATE 42P01/);
-    return true;
-  });
+  await assert.rejects(
+    createStatementLifecycle(client, options).submit({ statement: "SELECT * FROM t" }),
+    (error: unknown) => {
+      assert.ok(error instanceof SqlError);
+      assert.match(error.message, /TABLE_OR_VIEW_NOT_FOUND.*SQLSTATE 42P01/);
+      return true;
+    },
+  );
 });
 
 test("SHOW and EXPLAIN run with a single API call", async () => {
@@ -219,17 +279,37 @@ test("SHOW and EXPLAIN run with a single API call", async () => {
 
 test("queries pass DESCRIBE QUERY in the same context and then run", async () => {
   const { client, calls } = warehouse(described("id", "int"));
-  const result = await createStatementLifecycle(client, readOnly).submit({ statement: "SELECT * FROM t WHERE id = :id", parameters: [{ name: "id", value: 7 }], catalog: "main", schema: "s" });
+  const result = await createStatementLifecycle(client, readOnly).submit({
+    statement: "SELECT * FROM t WHERE id = :id",
+    parameters: [{ name: "id", value: 7 }],
+    catalog: "main",
+    schema: "s",
+  });
   assert.deepEqual(result.rows, [["1", "a"]]);
-  assert.deepEqual(statements(calls), ["DESCRIBE QUERY SELECT * FROM t WHERE id = :id", "SELECT * FROM t WHERE id = :id"]);
+  assert.deepEqual(statements(calls), [
+    "DESCRIBE QUERY SELECT * FROM t WHERE id = :id",
+    "SELECT * FROM t WHERE id = :id",
+  ]);
   const check = calls[0]!.payload as Record<string, unknown>;
-  assert.deepEqual([check.catalog, check.schema, check.parameters, check.on_wait_timeout], ["main", "s", [{ name: "id", value: "7" }], "CANCEL"]);
+  assert.deepEqual(
+    [check.catalog, check.schema, check.parameters, check.on_wait_timeout],
+    ["main", "s", [{ name: "id", value: "7" }], "CANCEL"],
+  );
 });
 
 test("statements that only look like reads are rejected and never submitted", async () => {
-  for (const statement of ["-- x\rDROP TABLE t /*\nSHOW */", "-- x \\\nSHOW\nDROP TABLE t", "/* /* */ SHOW */ DROP TABLE t", "SHOW: BEGIN SELECT 1 END"]) {
+  for (const statement of [
+    "-- x\rDROP TABLE t /*\nSHOW */",
+    "-- x \\\nSHOW\nDROP TABLE t",
+    "/* /* */ SHOW */ DROP TABLE t",
+    "SHOW: BEGIN SELECT 1 END",
+  ]) {
     const { client, calls } = warehouse(notAQuery);
-    await assert.rejects(createStatementLifecycle(client, readOnly).submit({ statement }), ReadOnlyViolationError, JSON.stringify(statement));
+    await assert.rejects(
+      createStatementLifecycle(client, readOnly).submit({ statement }),
+      ReadOnlyViolationError,
+      JSON.stringify(statement),
+    );
     assert.deepEqual(statements(calls), [`DESCRIBE QUERY ${statement}`], JSON.stringify(statement));
   }
 });
@@ -258,7 +338,11 @@ test("a ';' before the end is rejected in read-only mode without any API call", 
 });
 
 test("a single trailing ';' and a ';' inside a parameter value pass the read-only check", async () => {
-  for (const request of [{ statement: "SELECT 1;" }, { statement: "SELECT 1 ; \n" }, { statement: "SELECT :p", parameters: [{ name: "p", value: "a;b" }] }]) {
+  for (const request of [
+    { statement: "SELECT 1;" },
+    { statement: "SELECT 1 ; \n" },
+    { statement: "SELECT :p", parameters: [{ name: "p", value: "a;b" }] },
+  ]) {
     const { client, calls } = warehouse(described("id"));
     await createStatementLifecycle(client, readOnly).submit(request);
     assert.deepEqual(statements(calls), [`DESCRIBE QUERY ${request.statement}`, request.statement]);
@@ -273,35 +357,50 @@ test("writes mode runs statements with a ';' before the end unchecked", async ()
 
 test("a leading comment is rejected with a hint to remove it", async () => {
   const { client, calls } = warehouse(notAQuery);
-  await assert.rejects(createStatementLifecycle(client, readOnly).submit({ statement: "-- c\nSHOW TABLES" }), (error: unknown) => {
-    assert.ok(error instanceof ReadOnlyViolationError);
-    assert.match(error.message, /PARSE_SYNTAX_ERROR.*--allow-writes.*If the statement starts with a comment, remove it\./);
-    return true;
-  });
+  await assert.rejects(
+    createStatementLifecycle(client, readOnly).submit({ statement: "-- c\nSHOW TABLES" }),
+    (error: unknown) => {
+      assert.ok(error instanceof ReadOnlyViolationError);
+      assert.match(
+        error.message,
+        /PARSE_SYNTAX_ERROR.*--allow-writes.*If the statement starts with a comment, remove it\./,
+      );
+      return true;
+    },
+  );
   assert.equal(calls.length, 1);
 });
 
 test("a parse error in the check is a read-only violation that mentions --allow-writes", async () => {
   const { client, calls } = warehouse(notAQuery);
-  await assert.rejects(createStatementLifecycle(client, readOnly).submit({ statement: "DELETE FROM t" }), (error: unknown) => {
-    assert.ok(error instanceof ReadOnlyViolationError);
-    assert.match(error.message, /PARSE_SYNTAX_ERROR.*Syntax error at or near 'TABLE'.*--allow-writes/);
-    return true;
-  });
+  await assert.rejects(
+    createStatementLifecycle(client, readOnly).submit({ statement: "DELETE FROM t" }),
+    (error: unknown) => {
+      assert.ok(error instanceof ReadOnlyViolationError);
+      assert.match(error.message, /PARSE_SYNTAX_ERROR.*Syntax error at or near 'TABLE'.*--allow-writes/);
+      return true;
+    },
+  );
   assert.equal(calls.length, 1);
 });
 
 test("other check failures are SqlError and an unfinished check asks to retry", async () => {
   const missing = warehouse(failed("[TABLE_OR_VIEW_NOT_FOUND] The table `nope` cannot be found.", "42P01"));
-  await assert.rejects(createStatementLifecycle(missing.client, readOnly).submit({ statement: "SELECT * FROM nope" }), (error: unknown) => {
-    assert.ok(error instanceof SqlError);
-    assert.match(error.message, /^\[BAD_REQUEST\] \[TABLE_OR_VIEW_NOT_FOUND\].*42P01/);
-    return true;
-  });
+  await assert.rejects(
+    createStatementLifecycle(missing.client, readOnly).submit({ statement: "SELECT * FROM nope" }),
+    (error: unknown) => {
+      assert.ok(error instanceof SqlError);
+      assert.match(error.message, /^\[BAD_REQUEST\] \[TABLE_OR_VIEW_NOT_FOUND\].*42P01/);
+      return true;
+    },
+  );
   assert.equal(missing.calls.length, 1);
 
   const starting = warehouse({ statement_id: "ck", status: { state: "CANCELED" } });
-  await assert.rejects(createStatementLifecycle(starting.client, readOnly).submit({ statement: "SELECT 1" }), /warehouse may still be starting/);
+  await assert.rejects(
+    createStatementLifecycle(starting.client, readOnly).submit({ statement: "SELECT 1" }),
+    /warehouse may still be starting/,
+  );
 });
 
 test("writes mode and server-written SQL skip the read-only check", async () => {
@@ -309,13 +408,18 @@ test("writes mode and server-written SQL skip the read-only check", async () => 
   await createStatementLifecycle(writes.client, options).submit({ statement: "DELETE FROM t" });
   assert.deepEqual(statements(writes.calls), ["DELETE FROM t"]);
   const internal = fakeClient(() => succeeded([]));
-  await createStatementLifecycle(internal.client, readOnly).submitServerSql({ statement: "SELECT 1 FROM system.information_schema.tables" });
+  await createStatementLifecycle(internal.client, readOnly).submitServerSql({
+    statement: "SELECT 1 FROM system.information_schema.tables",
+  });
   assert.equal(internal.calls.length, 1);
 });
 
 test("submit always applies the read-only policy: no argument turns it off", async () => {
   const { client, calls } = fakeClient(() => succeeded([]));
-  const submit = createStatementLifecycle(client, readOnly).submit as (request: ExecuteSqlRequest, ...ignored: unknown[]) => Promise<unknown>;
+  const submit = createStatementLifecycle(client, readOnly).submit as (
+    request: ExecuteSqlRequest,
+    ...ignored: unknown[]
+  ) => Promise<unknown>;
   await assert.rejects(submit({ statement: "SELECT 1; DROP TABLE t" }, "server"), ReadOnlyViolationError);
   assert.equal(calls.length, 0);
 });
@@ -323,14 +427,19 @@ test("submit always applies the read-only policy: no argument turns it off", asy
 /** Scope that records what the lifecycle reports for the final log entry. */
 function recordingScope() {
   const reported: ExecutionDiagnostics[] = [];
-  return { scope: { annotate: (diagnostics: ExecutionDiagnostics) => void reported.push(diagnostics) }, reported: () => Object.assign({}, ...reported) as ExecutionDiagnostics };
+  return {
+    scope: { annotate: (diagnostics: ExecutionDiagnostics) => void reported.push(diagnostics) },
+    reported: () => Object.assign({}, ...reported) as ExecutionDiagnostics,
+  };
 }
 
 test("submit reports the duration of the read-only check to the scope", async () => {
   let clock = 1000;
   const { client } = warehouse(described("id"));
   const { scope, reported } = recordingScope();
-  await createStatementLifecycle(client, { ...readOnly, scope, now: () => (clock += 7) }).submit({ statement: "SELECT 1" });
+  await createStatementLifecycle(client, { ...readOnly, scope, now: () => (clock += 7) }).submit({
+    statement: "SELECT 1",
+  });
   assert.deepEqual(reported(), { checkMs: 7 });
 });
 
@@ -343,7 +452,9 @@ test("submit reports nothing when no check ran", async () => {
   await createStatementLifecycle(client, { ...options, scope: writes.scope }).submit({ statement: "SELECT 1" });
   assert.deepEqual(writes.reported(), {});
   const server = recordingScope();
-  await createStatementLifecycle(client, { ...readOnly, scope: server.scope }).submitServerSql({ statement: "SELECT 1" });
+  await createStatementLifecycle(client, { ...readOnly, scope: server.scope }).submitServerSql({
+    statement: "SELECT 1",
+  });
   assert.deepEqual(server.reported(), {});
 });
 
@@ -353,7 +464,10 @@ test("get and cancel call the statement endpoints", async () => {
   const result = await lifecycle.get("st 1");
   assert.equal(result.rowCount, 1);
   await lifecycle.cancel("st 1");
-  assert.deepEqual(calls.map((call) => `${call.method} ${call.path}`), ["GET /api/2.0/sql/statements/st%201", "POST /api/2.0/sql/statements/st%201/cancel"]);
+  assert.deepEqual(
+    calls.map((call) => `${call.method} ${call.path}`),
+    ["GET /api/2.0/sql/statements/st%201", "POST /api/2.0/sql/statements/st%201/cancel"],
+  );
 });
 
 test("get returns every row up to maxRows by default", async () => {
@@ -407,7 +521,10 @@ test("get stops polling when the wait is spent and clamps it to 30 seconds", asy
   sleeps.length = 0;
   clock.now = 0;
   await lifecycle.get("st1", { waitSeconds: 500 });
-  assert.equal(sleeps.reduce((total, ms) => total + ms, 0), 30_000);
+  assert.equal(
+    sleeps.reduce((total, ms) => total + ms, 0),
+    30_000,
+  );
 
   sleeps.length = 0;
   await lifecycle.get("st1", { waitSeconds: 0 });
@@ -426,18 +543,31 @@ test("get treats a non-finite wait as no wait", async () => {
 });
 
 test("query cancels a statement that is still running and asks to retry", async () => {
-  const { client, calls } = fakeClient((method) => (method === "POST" && calls.length === 1 ? { statement_id: "st1", status: { state: "RUNNING" } } : {}));
-  await assert.rejects(createStatementLifecycle(client, readOnly).query({ statement: "SELECT 1" }), (error: unknown) => {
-    assert.ok(error instanceof SqlError);
-    assert.match(error.message, /did not finish.*warehouse may be starting/);
-    return true;
-  });
-  assert.deepEqual(calls.map((call) => `${call.method} ${call.path}`), ["POST /api/2.0/sql/statements", "POST /api/2.0/sql/statements/st1/cancel"]);
+  const { client, calls } = fakeClient((method) =>
+    method === "POST" && calls.length === 1 ? { statement_id: "st1", status: { state: "RUNNING" } } : {},
+  );
+  await assert.rejects(
+    createStatementLifecycle(client, readOnly).query({ statement: "SELECT 1" }),
+    (error: unknown) => {
+      assert.ok(error instanceof SqlError);
+      assert.match(error.message, /did not finish.*warehouse may be starting/);
+      return true;
+    },
+  );
+  assert.deepEqual(
+    calls.map((call) => `${call.method} ${call.path}`),
+    ["POST /api/2.0/sql/statements", "POST /api/2.0/sql/statements/st1/cancel"],
+  );
 });
 
 test("query cancels a PENDING statement and returns finished ones without the read-only check", async () => {
-  const pending = fakeClient((_method, path) => (path.endsWith("/cancel") ? {} : { statement_id: "st3", status: { state: "PENDING" } }));
-  await assert.rejects(createStatementLifecycle(pending.client, options).query({ statement: "SELECT 1" }), /did not finish/);
+  const pending = fakeClient((_method, path) =>
+    path.endsWith("/cancel") ? {} : { statement_id: "st3", status: { state: "PENDING" } },
+  );
+  await assert.rejects(
+    createStatementLifecycle(pending.client, options).query({ statement: "SELECT 1" }),
+    /did not finish/,
+  );
   assert.equal(pending.calls.at(-1)!.path, "/api/2.0/sql/statements/st3/cancel");
 
   const done = fakeClient(() => succeeded([["1", "a"]]));
@@ -462,7 +592,16 @@ test("query still reports the unfinished statement when the cancel call fails", 
 test("submitExport posts an external-links statement without row limit", async () => {
   const { client, calls } = fakeClient(() => ({ statement_id: "ex1", status: { state: "PENDING" } }));
   const lifecycle = createStatementLifecycle(client, { ...options, maxExportBytes: 5000 });
-  const submitted = await lifecycle.submitExport({ statement: "SELECT * FROM t WHERE id = :id", parameters: [{ name: "id", value: 7, type: "INT" }], catalog: "main", schema: "s", rowLimit: 5 }, "csv");
+  const submitted = await lifecycle.submitExport(
+    {
+      statement: "SELECT * FROM t WHERE id = :id",
+      parameters: [{ name: "id", value: 7, type: "INT" }],
+      catalog: "main",
+      schema: "s",
+      rowLimit: 5,
+    },
+    "csv",
+  );
   assert.deepEqual(submitted, { statementId: "ex1", warehouseId: "wh-default" });
   assert.equal(calls.length, 1);
   assert.equal(calls[0]!.path, "/api/2.0/sql/statements");
@@ -486,26 +625,43 @@ test("submitExport maps the formats and defaults the byte limit to 10 GiB", asyn
   await lifecycle.submitExport({ statement: "SELECT 1" }, "parquet");
   await lifecycle.submitExport({ statement: "SELECT 1" }, "sqlite");
   const bodies = calls.map((call) => call.payload as { format: string; byte_limit: number; row_limit?: number });
-  assert.deepEqual(bodies.map((body) => body.format), ["ARROW_STREAM", "JSON_ARRAY"]);
-  assert.deepEqual(bodies.map((body) => body.byte_limit), [10 * 1024 ** 3, 10 * 1024 ** 3]);
+  assert.deepEqual(
+    bodies.map((body) => body.format),
+    ["ARROW_STREAM", "JSON_ARRAY"],
+  );
+  assert.deepEqual(
+    bodies.map((body) => body.byte_limit),
+    [10 * 1024 ** 3, 10 * 1024 ** 3],
+  );
   assert.ok(bodies.every((body) => !("row_limit" in body)));
 });
 
 test("submitExport rejects a failed statement", async () => {
   const { client } = fakeClient(() => failed("[TABLE_OR_VIEW_NOT_FOUND] t", "42P01"));
-  await assert.rejects(createStatementLifecycle(client, options).submitExport({ statement: "SELECT * FROM t" }, "csv"), SqlError);
+  await assert.rejects(
+    createStatementLifecycle(client, options).submitExport({ statement: "SELECT * FROM t" }, "csv"),
+    SqlError,
+  );
 });
 
 test("submitExport applies the read-only check before posting", async () => {
   const rejected = warehouse(notAQuery);
-  await assert.rejects(createStatementLifecycle(rejected.client, readOnly).submitExport({ statement: "DELETE FROM t" }, "csv"), ReadOnlyViolationError);
+  await assert.rejects(
+    createStatementLifecycle(rejected.client, readOnly).submitExport({ statement: "DELETE FROM t" }, "csv"),
+    ReadOnlyViolationError,
+  );
   assert.deepEqual(statements(rejected.calls), ["DESCRIBE QUERY DELETE FROM t"]);
 
   const accepted = fakeClient((_method, _path, payload) => {
     const body = payload as { statement: string };
-    return body.statement.startsWith("DESCRIBE QUERY ") ? described("id") : { statement_id: "ex2", status: { state: "PENDING" } };
+    return body.statement.startsWith("DESCRIBE QUERY ")
+      ? described("id")
+      : { statement_id: "ex2", status: { state: "PENDING" } };
   });
-  const submitted = await createStatementLifecycle(accepted.client, readOnly).submitExport({ statement: "SELECT 1" }, "csv");
+  const submitted = await createStatementLifecycle(accepted.client, readOnly).submitExport(
+    { statement: "SELECT 1" },
+    "csv",
+  );
   assert.equal(submitted.statementId, "ex2");
   assert.deepEqual(statements(accepted.calls), ["DESCRIBE QUERY SELECT 1", "SELECT 1"]);
   assert.equal((accepted.calls[0]!.payload as { disposition: string }).disposition, "INLINE");
@@ -515,14 +671,23 @@ test("submitExport applies the read-only check before posting", async () => {
 test("submitExport reports the check duration and the warehouse to the scope", async () => {
   let clock = 1000;
   const checked = fakeClient((_method, _path, payload) =>
-    (payload as { statement: string }).statement.startsWith("DESCRIBE QUERY ") ? described("id") : { statement_id: "ex3", status: { state: "PENDING" } },
+    (payload as { statement: string }).statement.startsWith("DESCRIBE QUERY ")
+      ? described("id")
+      : { statement_id: "ex3", status: { state: "PENDING" } },
   );
   const withCheck = recordingScope();
-  await createStatementLifecycle(checked.client, { ...readOnly, scope: withCheck.scope, now: () => (clock += 5) }).submitExport({ statement: "SELECT 1" }, "csv");
+  await createStatementLifecycle(checked.client, {
+    ...readOnly,
+    scope: withCheck.scope,
+    now: () => (clock += 5),
+  }).submitExport({ statement: "SELECT 1" }, "csv");
   assert.deepEqual(withCheck.reported(), { checkMs: 5, warehouseId: "wh-default" });
 
   const withoutCheck = recordingScope();
-  const submitted = await createStatementLifecycle(checked.client, { ...readOnly, scope: withoutCheck.scope }).submitExport({ statement: "SHOW TABLES" }, "csv");
+  const submitted = await createStatementLifecycle(checked.client, {
+    ...readOnly,
+    scope: withoutCheck.scope,
+  }).submitExport({ statement: "SHOW TABLES" }, "csv");
   assert.deepEqual(withoutCheck.reported(), { warehouseId: submitted.warehouseId });
 });
 
@@ -536,38 +701,88 @@ const exportSucceeded = (extra: Record<string, unknown> = {}) => ({
     schema: { columns: [{ name: "id", type_name: "INT", type_text: "INT", position: 0 }] },
     chunks: [0, 1, 2].map((chunkIndex) => ({ chunk_index: chunkIndex, row_count: 10 })),
   },
-  result: { external_links: [{ chunk_index: 0, row_count: 10, external_link: "https://storage.example/chunk-0", expiration: "2030-01-01T00:00:00.000Z" }] },
+  result: {
+    external_links: [
+      {
+        chunk_index: 0,
+        row_count: 10,
+        external_link: "https://storage.example/chunk-0",
+        expiration: "2030-01-01T00:00:00.000Z",
+      },
+    ],
+  },
   ...extra,
 });
 
 test("awaitExport describes a finished export and fetches the statement by its encoded id", async () => {
   const { client, calls } = fakeClient(() => exportSucceeded());
   const result = await createStatementLifecycle(client, options).awaitExport("ex 1", new AbortController().signal);
-  assert.deepEqual(calls.map((call) => `${call.method} ${call.path}`), ["GET /api/2.0/sql/statements/ex%201"]);
-  assert.deepEqual(result.columns.map((column) => column.name), ["id"]);
+  assert.deepEqual(
+    calls.map((call) => `${call.method} ${call.path}`),
+    ["GET /api/2.0/sql/statements/ex%201"],
+  );
+  assert.deepEqual(
+    result.columns.map((column) => column.name),
+    ["id"],
+  );
   assert.equal(result.chunkCount, 3);
   assert.equal(result.truncated, true);
-  assert.deepEqual([...result.chunkRowCounts], [[0, 10], [1, 10], [2, 10]]);
-  assert.deepEqual(result.firstLink, { url: "https://storage.example/chunk-0", rowCount: 10, expiration: "2030-01-01T00:00:00.000Z" });
+  assert.deepEqual(
+    [...result.chunkRowCounts],
+    [
+      [0, 10],
+      [1, 10],
+      [2, 10],
+    ],
+  );
+  assert.deepEqual(result.firstLink, {
+    url: "https://storage.example/chunk-0",
+    rowCount: 10,
+    expiration: "2030-01-01T00:00:00.000Z",
+  });
 });
 
 test("awaitExport reports no first link when the statement carries none or one of another chunk", async () => {
   const none = fakeClient(() => exportSucceeded({ result: undefined }));
-  assert.equal((await createStatementLifecycle(none.client, options).awaitExport("ex1", new AbortController().signal)).firstLink, undefined);
+  assert.equal(
+    (await createStatementLifecycle(none.client, options).awaitExport("ex1", new AbortController().signal)).firstLink,
+    undefined,
+  );
 
-  const other = fakeClient(() => exportSucceeded({ result: { external_links: [{ chunk_index: 2, external_link: "https://storage.example/chunk-2" }] } }));
-  assert.equal((await createStatementLifecycle(other.client, options).awaitExport("ex1", new AbortController().signal)).firstLink, undefined);
+  const other = fakeClient(() =>
+    exportSucceeded({
+      result: { external_links: [{ chunk_index: 2, external_link: "https://storage.example/chunk-2" }] },
+    }),
+  );
+  assert.equal(
+    (await createStatementLifecycle(other.client, options).awaitExport("ex1", new AbortController().signal)).firstLink,
+    undefined,
+  );
 });
 
 test("awaitExport describes an export without chunks", async () => {
-  const { client } = fakeClient(() => ({ statement_id: "ex1", status: { state: "SUCCEEDED" }, manifest: { total_chunk_count: 0, total_row_count: 0 } }));
+  const { client } = fakeClient(() => ({
+    statement_id: "ex1",
+    status: { state: "SUCCEEDED" },
+    manifest: { total_chunk_count: 0, total_row_count: 0 },
+  }));
   const result = await createStatementLifecycle(client, options).awaitExport("ex1", new AbortController().signal);
-  assert.deepEqual({ columns: result.columns, chunkCount: result.chunkCount, truncated: result.truncated, rowCounts: result.chunkRowCounts.size }, { columns: [], chunkCount: 0, truncated: false, rowCounts: 0 });
+  assert.deepEqual(
+    {
+      columns: result.columns,
+      chunkCount: result.chunkCount,
+      truncated: result.truncated,
+      rowCounts: result.chunkRowCounts.size,
+    },
+    { columns: [], chunkCount: 0, truncated: false, rowCounts: 0 },
+  );
 });
 
 test("awaitExport polls with waits growing to 10 s and no upper bound", async () => {
   const states = Array.from({ length: 13 }, () => "RUNNING");
-  const { client, calls } = fakeClient(() => (states.length > 0 ? { statement_id: "ex1", status: { state: states.shift() } } : exportSucceeded()));
+  const { client, calls } = fakeClient(() =>
+    states.length > 0 ? { statement_id: "ex1", status: { state: states.shift() } } : exportSucceeded(),
+  );
   const { lifecycle, sleeps } = pollingLifecycle(client);
   await lifecycle.awaitExport("ex1", new AbortController().signal);
   assert.deepEqual(sleeps, [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10_000, 10_000, 10_000, 10_000]);
@@ -576,7 +791,9 @@ test("awaitExport polls with waits growing to 10 s and no upper bound", async ()
 
 test("awaitExport waits on PENDING like on RUNNING", async () => {
   const states = ["PENDING", "RUNNING"];
-  const { client } = fakeClient(() => (states.length > 0 ? { statement_id: "ex1", status: { state: states.shift() } } : exportSucceeded()));
+  const { client } = fakeClient(() =>
+    states.length > 0 ? { statement_id: "ex1", status: { state: states.shift() } } : exportSucceeded(),
+  );
   const { lifecycle, sleeps } = pollingLifecycle(client);
   await lifecycle.awaitExport("ex1", new AbortController().signal);
   assert.deepEqual(sleeps, [1000, 2000]);
@@ -584,21 +801,27 @@ test("awaitExport waits on PENDING like on RUNNING", async () => {
 
 test("awaitExport raises SqlError with the Databricks message for a failed statement", async () => {
   const { client } = fakeClient(() => failed("[TABLE_OR_VIEW_NOT_FOUND] missing", "42P01"));
-  await assert.rejects(createStatementLifecycle(client, options).awaitExport("ex1", new AbortController().signal), (error: unknown) => {
-    assert.ok(error instanceof SqlError);
-    assert.equal(error.message, "[TABLE_OR_VIEW_NOT_FOUND] missing");
-    return true;
-  });
+  await assert.rejects(
+    createStatementLifecycle(client, options).awaitExport("ex1", new AbortController().signal),
+    (error: unknown) => {
+      assert.ok(error instanceof SqlError);
+      assert.equal(error.message, "[TABLE_OR_VIEW_NOT_FOUND] missing");
+      return true;
+    },
+  );
 });
 
 test("awaitExport raises SqlError naming the state of a canceled or closed statement", async () => {
   for (const state of ["CANCELED", "CLOSED"]) {
     const { client } = fakeClient(() => ({ statement_id: "ex1", status: { state } }));
-    await assert.rejects(createStatementLifecycle(client, options).awaitExport("ex1", new AbortController().signal), (error: unknown) => {
-      assert.ok(error instanceof SqlError);
-      assert.equal(error.message, `Export statement ended in state ${state}.`);
-      return true;
-    });
+    await assert.rejects(
+      createStatementLifecycle(client, options).awaitExport("ex1", new AbortController().signal),
+      (error: unknown) => {
+        assert.ok(error instanceof SqlError);
+        assert.equal(error.message, `Export statement ended in state ${state}.`);
+        return true;
+      },
+    );
   }
 });
 
@@ -648,22 +871,45 @@ test("awaitExport releases the wait it was sleeping in when the signal aborts, s
 });
 
 test("exportChunkLink requests the link of a chunk by the encoded statement id", async () => {
-  const { client, calls } = fakeClient(() => ({ external_links: [{ chunk_index: 2, row_count: 7, external_link: "https://storage.example/chunk-2", expiration: "2030-01-01T00:00:00.000Z" }] }));
+  const { client, calls } = fakeClient(() => ({
+    external_links: [
+      {
+        chunk_index: 2,
+        row_count: 7,
+        external_link: "https://storage.example/chunk-2",
+        expiration: "2030-01-01T00:00:00.000Z",
+      },
+    ],
+  }));
   const link = await createStatementLifecycle(client, options).exportChunkLink("ex 1", 2, new AbortController().signal);
-  assert.deepEqual(calls.map((call) => `${call.method} ${call.path}`), ["GET /api/2.0/sql/statements/ex%201/result/chunks/2"]);
-  assert.deepEqual(link, { url: "https://storage.example/chunk-2", rowCount: 7, expiration: "2030-01-01T00:00:00.000Z" });
+  assert.deepEqual(
+    calls.map((call) => `${call.method} ${call.path}`),
+    ["GET /api/2.0/sql/statements/ex%201/result/chunks/2"],
+  );
+  assert.deepEqual(link, {
+    url: "https://storage.example/chunk-2",
+    rowCount: 7,
+    expiration: "2030-01-01T00:00:00.000Z",
+  });
 });
 
 test("exportChunkLink fails when Databricks returns no link", async () => {
   for (const response of [{}, { external_links: [] }]) {
     const { client } = fakeClient(() => response);
-    await assert.rejects(createStatementLifecycle(client, options).exportChunkLink("ex1", 4, new AbortController().signal), /no link for chunk 4/);
+    await assert.rejects(
+      createStatementLifecycle(client, options).exportChunkLink("ex1", 4, new AbortController().signal),
+      /no link for chunk 4/,
+    );
   }
 });
 
 test("exportChunkLink rejects with the signal's reason when the signal aborts during the request", async () => {
   const controller = new AbortController();
-  const client = { host: "https://ws", get: () => new Promise(() => undefined), post: async () => ({}) } as unknown as DatabricksClient;
+  const client = {
+    host: "https://ws",
+    get: () => new Promise(() => undefined),
+    post: async () => ({}),
+  } as unknown as DatabricksClient;
   const pending = createStatementLifecycle(client, options).exportChunkLink("ex1", 0, controller.signal);
   const reason = new Error("stop");
   controller.abort(reason);

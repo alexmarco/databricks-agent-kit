@@ -5,7 +5,14 @@ import type { ExportState } from "../src/export/types.ts";
 import { createStatementLookup } from "../src/statement-lookup.ts";
 import type { StatementLifecycle, StatementResult } from "../src/statements.ts";
 
-const plainResult: StatementResult = { statementId: "st-plain", state: "SUCCEEDED", columns: [{ name: "x", type: "INT" }], rows: [["1"]], rowCount: 1, truncated: false };
+const plainResult: StatementResult = {
+  statementId: "st-plain",
+  state: "SUCCEEDED",
+  columns: [{ name: "x", type: "INT" }],
+  rows: [["1"]],
+  rowCount: 1,
+  truncated: false,
+};
 
 function exportState(status: ExportState["status"]): ExportState {
   return { id: "export-1", statementId: "st-export", format: "csv", path: "/exports/export-1.csv", status };
@@ -48,14 +55,20 @@ function fakes(exportsByStatement: Record<string, ExportState>, waitResult?: Exp
 test("get answers a running export with its state and does not wait without a wait time", async () => {
   const { lookup, calls } = fakes({ "st-export": exportState("DOWNLOADING") });
   assert.deepEqual(await lookup.get("st-export", {}), { statementId: "st-export", export: exportState("DOWNLOADING") });
-  assert.deepEqual(await lookup.get("st-export", { waitSeconds: 0 }), { statementId: "st-export", export: exportState("DOWNLOADING") });
+  assert.deepEqual(await lookup.get("st-export", { waitSeconds: 0 }), {
+    statementId: "st-export",
+    export: exportState("DOWNLOADING"),
+  });
   assert.deepEqual(calls.wait, []);
   assert.deepEqual(calls.get, []);
 });
 
 test("get waits for an export up to the wait time and returns its state at that moment", async () => {
   const { lookup, calls } = fakes({ "st-export": exportState("DOWNLOADING") }, exportState("SUCCEEDED"));
-  assert.deepEqual(await lookup.get("st-export", { waitSeconds: 3 }), { statementId: "st-export", export: exportState("SUCCEEDED") });
+  assert.deepEqual(await lookup.get("st-export", { waitSeconds: 3 }), {
+    statementId: "st-export",
+    export: exportState("SUCCEEDED"),
+  });
   assert.deepEqual(calls.wait, [{ statementId: "st-export", timeoutMs: 3000 }]);
   assert.deepEqual(calls.get, []);
 });
@@ -86,7 +99,11 @@ test("cancel stops a running export through the export manager only", async () =
 
 test("cancel does not report a finished export as cancelled and returns its state", async () => {
   const { lookup, calls } = fakes({ "st-export": exportState("SUCCEEDED") });
-  assert.deepEqual(await lookup.cancel("st-export"), { statementId: "st-export", cancelled: false, export: exportState("SUCCEEDED") });
+  assert.deepEqual(await lookup.cancel("st-export"), {
+    statementId: "st-export",
+    cancelled: false,
+    export: exportState("SUCCEEDED"),
+  });
   assert.deepEqual(calls.cancelStatement, []);
 });
 
@@ -99,6 +116,11 @@ test("cancel sends a plain or unknown statement id to the statement lifecycle", 
 
 test("cancel lets the error of the statement lifecycle reach the caller", async () => {
   const { exports } = fakes({});
-  const statements = { get: async () => plainResult, cancel: async () => { throw new Error("404 not found"); } } as unknown as Pick<StatementLifecycle, "get" | "cancel">;
+  const statements = {
+    get: async () => plainResult,
+    cancel: async () => {
+      throw new Error("404 not found");
+    },
+  } as unknown as Pick<StatementLifecycle, "get" | "cancel">;
   await assert.rejects(createStatementLookup({ statements, exports }).cancel("st-missing"), /404 not found/);
 });

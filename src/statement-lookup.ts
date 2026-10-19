@@ -31,7 +31,10 @@ export function createStatementLookup({ statements, exports }: StatementLookupDe
    * State of the statement. An export gives its state now or, with `waitSeconds` above 0, when it ends or the wait is
    * spent; a plain statement gives its shaped result, polled for `waitSeconds` (see `StatementLifecycle.get`).
    */
-  async function get(statementId: string, { waitSeconds }: { waitSeconds?: number | undefined }): Promise<ExportStatus | StatementResult> {
+  async function get(
+    statementId: string,
+    { waitSeconds }: { waitSeconds?: number | undefined },
+  ): Promise<ExportStatus | StatementResult> {
     const exported = await exports.get(statementId);
     if (exported === undefined) return statements.get(statementId, { waitSeconds });
     const waitMs = (waitSeconds ?? 0) * 1000;

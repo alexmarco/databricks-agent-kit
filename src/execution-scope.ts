@@ -44,7 +44,12 @@ export interface ExecutionScope {
  * Writes the success entry. It only observes the work, which already happened: a summary that throws is left out of the
  * entry, and an entry that cannot be written is dropped, so neither turns the work's result into a failure.
  */
-function writeSuccessEntry<T>(execution: ExecutionHandle, entry: FinalEntry<T>, result: T, metadata: (summary?: Record<string, unknown>) => Record<string, unknown> | undefined): void {
+function writeSuccessEntry<T>(
+  execution: ExecutionHandle,
+  entry: FinalEntry<T>,
+  result: T,
+  metadata: (summary?: Record<string, unknown>) => Record<string, unknown> | undefined,
+): void {
   let summary: Record<string, unknown> | undefined;
   try {
     summary = entry.summarize?.(result);
@@ -63,13 +68,19 @@ export function createExecutionScope(logs: LogService): ExecutionScope {
   const diagnosticsByExecution = new WeakMap<ExecutionHandle, ExecutionDiagnostics>();
 
   return {
-    async run<T>(target: ExecutionTarget, work: (execution: ExecutionHandle) => Promise<T>, entry?: FinalEntry<T>): Promise<T> {
+    async run<T>(
+      target: ExecutionTarget,
+      work: (execution: ExecutionHandle) => Promise<T>,
+      entry?: FinalEntry<T>,
+    ): Promise<T> {
       const execution = logs.startExecution(target);
       const diagnostics: ExecutionDiagnostics = {};
       diagnosticsByExecution.set(execution, diagnostics);
       const startedAt = Date.now();
       const entryMetadata = (summary?: Record<string, unknown>) =>
-        entry === undefined ? undefined : { ...entry.arguments, durationMs: Date.now() - startedAt, ...summary, ...diagnostics };
+        entry === undefined
+          ? undefined
+          : { ...entry.arguments, durationMs: Date.now() - startedAt, ...summary, ...diagnostics };
       return logs.run(execution, async () => {
         try {
           const result = await work(execution);

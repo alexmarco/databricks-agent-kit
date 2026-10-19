@@ -85,7 +85,13 @@ test("csv sink writes only the header built from the columns when no chunk arriv
 
 test("csv sink quotes header names containing a comma, quote, CR or LF", async () => {
   await withTempDir(async (dir) => {
-    const columns = [column("a,b", 0), column('say "hi"', 1), column("cr\rx", 2), column("lf\ny", 3), column("plain", 4)];
+    const columns = [
+      column("a,b", 0),
+      column('say "hi"', 1),
+      column("cr\rx", 2),
+      column("lf\ny", 3),
+      column("plain", 4),
+    ];
     const sink = await createCsvSink({ id: "quoted-1", dir, columns });
 
     const { files } = await sink.finish();

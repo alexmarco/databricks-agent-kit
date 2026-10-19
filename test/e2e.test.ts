@@ -63,7 +63,12 @@ async function startPresignedStub() {
 }
 
 function exportLink(presignedUrl: string, kind: string, index: number) {
-  return { chunk_index: index, row_offset: index, row_count: 1, external_link: `${presignedUrl}/${kind}/${index}?X-Amz-Signature=e2e` };
+  return {
+    chunk_index: index,
+    row_offset: index,
+    row_count: 1,
+    external_link: `${presignedUrl}/${kind}/${index}?X-Amz-Signature=e2e`,
+  };
 }
 
 /** Statement of a finished export as Databricks returns it: the manifest and the link of chunk 0. */
@@ -101,48 +106,89 @@ async function startDatabricksStub(options: { warehouseFailures?: number } = {})
   const requests: string[] = [];
   let warehouseFailures = options.warehouseFailures ?? 0;
   const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
-    const send = (status: number, payload: unknown) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(payload));
+    const send = (status: number, payload: unknown) =>
+      response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(payload));
     requests.push(`${request.method} ${request.url}`);
-    if (request.headers.authorization !== `Bearer ${TOKEN}`) return send(401, { error_code: "UNAUTHENTICATED", message: "bad token" });
+    if (request.headers.authorization !== `Bearer ${TOKEN}`)
+      return send(401, { error_code: "UNAUTHENTICATED", message: "bad token" });
     const url = new URL(request.url ?? "/", "http://stub");
     if (request.method === "GET" && url.pathname === "/api/2.0/sql/warehouses") {
       if (warehouseFailures > 0) {
         warehouseFailures -= 1;
         return send(503, { error_code: "TEMPORARILY_UNAVAILABLE", message: "try again" });
       }
-      return send(200, { warehouses: [{ id: "wh-e2e", name: "Serverless Starter", state: "RUNNING", enable_serverless_compute: true }] });
+      return send(200, {
+        warehouses: [{ id: "wh-e2e", name: "Serverless Starter", state: "RUNNING", enable_serverless_compute: true }],
+      });
     }
     if (request.method === "GET" && url.pathname === "/api/2.1/unity-catalog/tables/main.sales.orders") {
-      return send(200, { full_name: "main.sales.orders", table_type: "MANAGED", comment: "Orders", columns: [{ name: "order_id", type_text: "bigint", nullable: false }] });
+      return send(200, {
+        full_name: "main.sales.orders",
+        table_type: "MANAGED",
+        comment: "Orders",
+        columns: [{ name: "order_id", type_text: "bigint", nullable: false }],
+      });
     }
     if (request.method === "POST" && url.pathname === STATEMENTS_PATH) {
       const body = await readJson(request);
       const statement = String(body.statement);
-      const explain = (...rows: string[]) => send(200, { statement_id: "st-explain", status: { state: "SUCCEEDED" }, result: { data_array: rows.map((row) => [row]) } });
-      const fail = (message: string, sqlState: string) => send(200, { statement_id: "st-fail", status: { state: "FAILED", error: { error_code: "BAD_REQUEST", message, sql_state: sqlState } } });
+      const explain = (...rows: string[]) =>
+        send(200, {
+          statement_id: "st-explain",
+          status: { state: "SUCCEEDED" },
+          result: { data_array: rows.map((row) => [row]) },
+        });
+      const fail = (message: string, sqlState: string) =>
+        send(200, {
+          statement_id: "st-fail",
+          status: { state: "FAILED", error: { error_code: "BAD_REQUEST", message, sql_state: sqlState } },
+        });
       if (statement === "DESCRIBE QUERY SELECT 1 AS result") return explain("result");
-      if (statement.startsWith("DESCRIBE QUERY DELETE")) return fail("[PARSE_SYNTAX_ERROR] Syntax error at or near 'FROM'.", "42601");
-      if (statement.startsWith("DESCRIBE QUERY ") && EXPORT_STATEMENTS.has(statement.slice("DESCRIBE QUERY ".length))) return explain("id", "s");
+      if (statement.startsWith("DESCRIBE QUERY DELETE"))
+        return fail("[PARSE_SYNTAX_ERROR] Syntax error at or near 'FROM'.", "42601");
+      if (statement.startsWith("DESCRIBE QUERY ") && EXPORT_STATEMENTS.has(statement.slice("DESCRIBE QUERY ".length)))
+        return explain("id", "s");
       const exported = EXPORT_STATEMENTS.get(statement);
       if (exported !== undefined) {
-        if (body.disposition !== "EXTERNAL_LINKS" || body.format !== "CSV" || body.wait_timeout !== "0s") return fail(`unexpected export request ${JSON.stringify(body)}`, "42000");
+        if (body.disposition !== "EXTERNAL_LINKS" || body.format !== "CSV" || body.wait_timeout !== "0s")
+          return fail(`unexpected export request ${JSON.stringify(body)}`, "42000");
         return send(200, { statement_id: exported.statementId, status: { state: "PENDING" } });
       }
       if (statement === "SELECT 1 AS result") {
-        return send(200, { statement_id: "st-e2e", status: { state: "SUCCEEDED" }, manifest: { schema: { columns: [{ name: "result", type_text: "INT" }] }, total_row_count: 1 }, result: { data_array: [["1"]] } });
+        return send(200, {
+          statement_id: "st-e2e",
+          status: { state: "SUCCEEDED" },
+          manifest: { schema: { columns: [{ name: "result", type_text: "INT" }] }, total_row_count: 1 },
+          result: { data_array: [["1"]] },
+        });
       }
       if (statement.includes("information_schema")) {
-        return send(200, { statement_id: "st-tags", status: { state: "SUCCEEDED" }, manifest: { schema: { columns: [] }, total_row_count: 0 }, result: { data_array: [] } });
+        return send(200, {
+          statement_id: "st-tags",
+          status: { state: "SUCCEEDED" },
+          manifest: { schema: { columns: [] }, total_row_count: 0 },
+          result: { data_array: [] },
+        });
       }
-      return send(200, { statement_id: "st-fail", status: { state: "FAILED", error: { error_code: "BAD_REQUEST", message: "[TABLE_OR_VIEW_NOT_FOUND] nope", sql_state: "42P01" } } });
+      return send(200, {
+        statement_id: "st-fail",
+        status: {
+          state: "FAILED",
+          error: { error_code: "BAD_REQUEST", message: "[TABLE_OR_VIEW_NOT_FOUND] nope", sql_state: "42P01" },
+        },
+      });
     }
-    const statementRoute = /^\/api\/2\.0\/sql\/statements\/([^/]+)(?:\/(cancel|result\/chunks\/(\d+)))?$/.exec(url.pathname);
+    const statementRoute = /^\/api\/2\.0\/sql\/statements\/([^/]+)(?:\/(cancel|result\/chunks\/(\d+)))?$/.exec(
+      url.pathname,
+    );
     const kind = EXPORT_KINDS.get(decodeURIComponent(statementRoute?.[1] ?? ""));
     if (statementRoute !== null && kind !== undefined) {
       const [, statementId = "", action, chunkIndex] = statementRoute;
       if (request.method === "POST" && action === "cancel") return send(200, {});
-      if (request.method === "GET" && action === undefined) return send(200, succeededExport(decodeURIComponent(statementId), kind, presigned.url));
-      if (request.method === "GET" && chunkIndex !== undefined) return send(200, { external_links: [exportLink(presigned.url, kind, Number(chunkIndex))] });
+      if (request.method === "GET" && action === undefined)
+        return send(200, succeededExport(decodeURIComponent(statementId), kind, presigned.url));
+      if (request.method === "GET" && chunkIndex !== undefined)
+        return send(200, { external_links: [exportLink(presigned.url, kind, Number(chunkIndex))] });
     }
     return send(404, { error_code: "NOT_FOUND", message: `no route ${url.pathname}` });
   });
@@ -171,8 +217,14 @@ const exportDirOf = (storageDir: string) => join(storageDir, "export-e2e");
 /** Environment of a child without any Databricks credentials: no DATABRICKS_* variables and no config file. */
 function bareEnv(storageDir: string): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) if (value !== undefined && !key.startsWith("DATABRICKS_") && !key.startsWith("DAK_")) env[key] = value;
-  return { ...env, DATABRICKS_CONFIG_FILE: join(storageDir, "missing.databrickscfg"), DAK_STORAGE_DIR: storageDir, DAK_EXPORT_DIR: exportDirOf(storageDir) };
+  for (const [key, value] of Object.entries(process.env))
+    if (value !== undefined && !key.startsWith("DATABRICKS_") && !key.startsWith("DAK_")) env[key] = value;
+  return {
+    ...env,
+    DATABRICKS_CONFIG_FILE: join(storageDir, "missing.databrickscfg"),
+    DAK_STORAGE_DIR: storageDir,
+    DAK_EXPORT_DIR: exportDirOf(storageDir),
+  };
 }
 
 function childEnv(stubUrl: string, storageDir: string): Record<string, string> {
@@ -180,7 +232,10 @@ function childEnv(stubUrl: string, storageDir: string): Record<string, string> {
 }
 
 function spawnHttpChild(port: number, env: Record<string, string>): ChildProcess & { stderr: NodeJS.ReadableStream } {
-  return spawn(process.execPath, [cliPath, "mcp", "--transport", "http", "--port", String(port)], { env, stdio: ["ignore", "ignore", "pipe"] });
+  return spawn(process.execPath, [cliPath, "mcp", "--transport", "http", "--port", String(port)], {
+    env,
+    stdio: ["ignore", "ignore", "pipe"],
+  });
 }
 
 /** Resolves with the MCP endpoint URL once the HTTP child reports it is listening. */
@@ -216,12 +271,13 @@ async function stopChild(child: ChildProcess, graceMs = 5_000): Promise<void> {
   }
 }
 
-const text = (result: { content?: unknown }) => ((result.content as Array<{ text: string }>)[0]?.text ?? "");
+const text = (result: { content?: unknown }) => (result.content as Array<{ text: string }>)[0]?.text ?? "";
 const resourceJson = (contents: Array<{ text: string } | { blob: string }>) => {
   const first = contents[0];
   return JSON.parse(first !== undefined && "text" in first ? first.text : "{}");
 };
-const readResourceJson = async (client: Client, uri: string) => resourceJson((await client.readResource({ uri })).contents);
+const readResourceJson = async (client: Client, uri: string) =>
+  resourceJson((await client.readResource({ uri })).contents);
 
 /** Calls a tool that must succeed and parses its JSON text. */
 async function callJson(client: Client, name: string, args: Record<string, unknown>) {
@@ -233,7 +289,10 @@ async function callJson(client: Client, name: string, args: Record<string, unkno
 /** Polls `get_statement` with `wait_seconds` until the export reaches a final state. */
 async function waitForExport(client: Client, statementId: string): Promise<ExportState> {
   for (let attempt = 0; attempt < 10; attempt++) {
-    const { export: state } = (await callJson(client, "get_statement", { statement_id: statementId, wait_seconds: 5 })) as { export: ExportState };
+    const { export: state } = (await callJson(client, "get_statement", {
+      statement_id: statementId,
+      wait_seconds: 5,
+    })) as { export: ExportState };
     if (state.status === "SUCCEEDED" || state.status === "FAILED" || state.status === "CANCELED") return state;
   }
   throw new Error(`Export ${statementId} did not finish`);
@@ -250,8 +309,15 @@ async function until(condition: () => boolean, what: string, timeoutMs = 10_000)
 const partFiles = async (dir: string) => (await readdir(dir)).filter((name) => name.endsWith(".part"));
 
 /** Exports `SELECT * FROM big` as CSV and checks the file, the presigned requests and the absence of `.part` files. */
-async function assertBigCsvExport(client: Client, stub: Awaited<ReturnType<typeof startDatabricksStub>>, exportDir: string): Promise<void> {
-  const started = await callJson(client, "execute_sql", { statement: "SELECT * FROM big", export: { format: "csv", name: "big" } });
+async function assertBigCsvExport(
+  client: Client,
+  stub: Awaited<ReturnType<typeof startDatabricksStub>>,
+  exportDir: string,
+): Promise<void> {
+  const started = await callJson(client, "execute_sql", {
+    statement: "SELECT * FROM big",
+    export: { format: "csv", name: "big" },
+  });
   assert.equal(started.state, "PENDING");
   assert.equal(started.statementId, "big00001-e2e");
   assert.equal(started.export.id, "big-big00001-e2e");
@@ -263,19 +329,29 @@ async function assertBigCsvExport(client: Client, stub: Awaited<ReturnType<typeo
   assert.equal(finished.rows, 2);
   assert.equal(await readFile(file, "utf8"), "id,s\n1,a\n2,b\n");
   assert.deepEqual(
-    stub.presigned.requests.filter((request) => request.path.startsWith("/big/")).map((request) => request.path).sort(),
+    stub.presigned.requests
+      .filter((request) => request.path.startsWith("/big/"))
+      .map((request) => request.path)
+      .sort(),
     ["/big/0", "/big/1"],
   );
   assert.ok(stub.requests.includes(`GET ${STATEMENTS_PATH}/big00001-e2e/result/chunks/1`), "chunk 1 gets a fresh link");
   assert.deepEqual(await partFiles(exportDir), []);
 }
 
-test("stdio: a real dak mcp process serves tools, enforces read-only and persists logs", { timeout: 60_000 }, async () => {
+test("stdio: a real dak mcp process serves tools, enforces read-only and persists logs", {
+  timeout: 60_000,
+}, async () => {
   const stub = await startDatabricksStub();
   const storageDir = await mkdtemp(join(tmpdir(), "dak-e2e-"));
   const client = new Client({ name: "e2e-stdio", version: "1.0.0" });
   try {
-    const transport = new StdioClientTransport({ command: process.execPath, args: [cliPath, "mcp"], env: childEnv(stub.url, storageDir), stderr: "pipe" });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [cliPath, "mcp"],
+      env: childEnv(stub.url, storageDir),
+      stderr: "pipe",
+    });
     await client.connect(transport);
 
     assert.equal((await client.listTools()).tools.length, 5);
@@ -284,7 +360,10 @@ test("stdio: a real dak mcp process serves tools, enforces read-only and persist
     assert.deepEqual(JSON.parse(text(select)).rows, [["1"]]);
     assert.equal(JSON.parse(text(select)).warehouseId, "wh-e2e");
 
-    const write = await client.callTool({ name: "execute_sql", arguments: { statement: "DELETE FROM main.sales.orders" } });
+    const write = await client.callTool({
+      name: "execute_sql",
+      arguments: { statement: "DELETE FROM main.sales.orders" },
+    });
     assert.equal(write.isError, true);
     assert.match(text(write), /--allow-writes/);
 
@@ -295,9 +374,14 @@ test("stdio: a real dak mcp process serves tools, enforces read-only and persist
     assert.equal(JSON.parse(text(described)).fullName, "main.sales.orders");
 
     const recent = resourceJson((await client.readResource({ uri: "resource://logs/executions/recent" })).contents);
-    const failedWrite = recent.executions.find((execution: { toolName?: string; status: string }) => execution.toolName === "execute_sql" && execution.status === "failed");
+    const failedWrite = recent.executions.find(
+      (execution: { toolName?: string; status: string }) =>
+        execution.toolName === "execute_sql" && execution.status === "failed",
+    );
     assert.ok(failedWrite, "a failed execute_sql execution is listed");
-    const detail = resourceJson((await client.readResource({ uri: `resource://logs/execution/${failedWrite.executionId}` })).contents);
+    const detail = resourceJson(
+      (await client.readResource({ uri: `resource://logs/execution/${failedWrite.executionId}` })).contents,
+    );
     assert.ok(detail.logs.some((log: { level: string }) => log.level === "warn"));
 
     await client.close();
@@ -305,7 +389,9 @@ test("stdio: a real dak mcp process serves tools, enforces read-only and persist
     const repository = await openLogRepository(join(storageDir, "logs.db"));
     try {
       const executions = repository.recentExecutions(50);
-      assert.ok(executions.some((execution) => execution.toolName === "execute_sql" && execution.status === "completed"));
+      assert.ok(
+        executions.some((execution) => execution.toolName === "execute_sql" && execution.status === "completed"),
+      );
       assert.ok(executions.some((execution) => execution.toolName === "describe_table"));
     } finally {
       repository.close();
@@ -318,16 +404,31 @@ test("stdio: a real dak mcp process serves tools, enforces read-only and persist
   }
 });
 
-test("stdio: exports a multi-chunk CSV through presigned links and cancels a running export", { timeout: 60_000 }, async () => {
+test("stdio: exports a multi-chunk CSV through presigned links and cancels a running export", {
+  timeout: 60_000,
+}, async () => {
   const stub = await startDatabricksStub();
   const storageDir = await mkdtemp(join(tmpdir(), "dak-e2e-"));
   const exportDir = exportDirOf(storageDir);
   const client = new Client({ name: "e2e-stdio-export", version: "1.0.0" });
   try {
-    await client.connect(new StdioClientTransport({ command: process.execPath, args: [cliPath, "mcp"], env: childEnv(stub.url, storageDir), stderr: "pipe" }));
+    await client.connect(
+      new StdioClientTransport({
+        command: process.execPath,
+        args: [cliPath, "mcp"],
+        env: childEnv(stub.url, storageDir),
+        stderr: "pipe",
+      }),
+    );
 
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map((tool) => tool.name).sort(), ["describe_table", "execute_sql", "get_statement", "list_objects", "search_metadata"]);
+    assert.deepEqual(tools.map((tool) => tool.name).sort(), [
+      "describe_table",
+      "execute_sql",
+      "get_statement",
+      "list_objects",
+      "search_metadata",
+    ]);
     const toolsLength = JSON.stringify(tools).length;
     assert.ok(toolsLength <= 2500, `tool definitions take ${toolsLength} characters`);
 
@@ -337,21 +438,34 @@ test("stdio: exports a multi-chunk CSV through presigned links and cancels a run
     const statsAfter = await readResourceJson(client, "resource://logs/stats");
     assert.equal(statsAfter.last24h.executions, statsBefore.last24h.executions, "reading the stats opens no execution");
 
-    const slow = await callJson(client, "execute_sql", { statement: "SELECT * FROM slow", export: { format: "csv", name: "slow" } });
+    const slow = await callJson(client, "execute_sql", {
+      statement: "SELECT * FROM slow",
+      export: { format: "csv", name: "slow" },
+    });
     assert.equal(slow.state, "PENDING");
-    await until(() => stub.presigned.requests.some((request) => request.path === "/slow/1"), "the download of chunk 1 of slow");
+    await until(
+      () => stub.presigned.requests.some((request) => request.path === "/slow/1"),
+      "the download of chunk 1 of slow",
+    );
     assert.deepEqual(await partFiles(exportDir), ["slow-slow0001-e2e.csv.part"]);
 
     const cancelled = await callJson(client, "get_statement", { statement_id: slow.statementId, cancel: true });
     assert.equal(cancelled.cancelled, true);
     const afterCancel = await callJson(client, "get_statement", { statement_id: slow.statementId });
     assert.equal(afterCancel.export.status, "CANCELED");
-    assert.ok(stub.requests.includes(`POST ${STATEMENTS_PATH}/slow0001-e2e/cancel`), "the statement is cancelled in Databricks");
+    assert.ok(
+      stub.requests.includes(`POST ${STATEMENTS_PATH}/slow0001-e2e/cancel`),
+      "the statement is cancelled in Databricks",
+    );
     assert.deepEqual(await partFiles(exportDir), []);
     assert.deepEqual((await readdir(exportDir)).sort(), ["big-big00001-e2e.csv"]);
 
     assert.ok(stub.presigned.requests.length >= 4);
-    assert.deepEqual(stub.presigned.requests.filter((request) => request.authorization !== undefined), [], "the presigned origin never sees an authorization header");
+    assert.deepEqual(
+      stub.presigned.requests.filter((request) => request.authorization !== undefined),
+      [],
+      "the presigned origin never sees an authorization header",
+    );
   } finally {
     await client.close();
     await stub.close();
@@ -363,7 +477,14 @@ test("stdio: serves the log resources without any Databricks credentials", { tim
   const storageDir = await mkdtemp(join(tmpdir(), "dak-e2e-"));
   const client = new Client({ name: "e2e-stdio-bare", version: "1.0.0" });
   try {
-    await client.connect(new StdioClientTransport({ command: process.execPath, args: [cliPath, "mcp"], env: bareEnv(storageDir), stderr: "pipe" }));
+    await client.connect(
+      new StdioClientTransport({
+        command: process.execPath,
+        args: [cliPath, "mcp"],
+        env: bareEnv(storageDir),
+        stderr: "pipe",
+      }),
+    );
     assert.equal((await client.listTools()).tools.length, 5);
     const stats = await readResourceJson(client, "resource://logs/stats");
     assert.equal(typeof stats.last24h.executions, "number");
@@ -391,7 +512,10 @@ test("http: a real dak mcp process serves Streamable HTTP on loopback", { timeou
     const select = await client.callTool({ name: "execute_sql", arguments: { statement: "SELECT 1 AS result" } });
     assert.deepEqual(JSON.parse(text(select)).rows, [["1"]]);
     await assertBigCsvExport(client, stub, exportDirOf(storageDir));
-    assert.deepEqual(stub.presigned.requests.filter((request) => request.authorization !== undefined), []);
+    assert.deepEqual(
+      stub.presigned.requests.filter((request) => request.authorization !== undefined),
+      [],
+    );
   } finally {
     await client.close();
     await stopChild(child);
@@ -400,7 +524,9 @@ test("http: a real dak mcp process serves Streamable HTTP on loopback", { timeou
   }
 });
 
-test("http: rejected requests and Databricks retries are logged as warnings, the 401 once per minute", { timeout: 60_000 }, async () => {
+test("http: rejected requests and Databricks retries are logged as warnings, the 401 once per minute", {
+  timeout: 60_000,
+}, async () => {
   const stub = await startDatabricksStub({ warehouseFailures: 1 });
   const storageDir = await mkdtemp(join(tmpdir(), "dak-e2e-"));
   const port = await freePort();
@@ -409,12 +535,20 @@ test("http: rejected requests and Databricks retries are logged as warnings, the
   try {
     const url = await waitForHttpUrl(child);
     for (let attempt = 0; attempt < 2; attempt++) {
-      const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
       await response.text();
       assert.equal(response.status, 401);
     }
 
-    await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { authorization: `Bearer ${HTTP_TOKEN}` } } }));
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(url), {
+        requestInit: { headers: { authorization: `Bearer ${HTTP_TOKEN}` } },
+      }),
+    );
     const select = await callJson(client, "execute_sql", { statement: "SELECT 1 AS result" });
     assert.deepEqual(select.rows, [["1"]]);
     // Reading a log resource flushes the child's log queue to SQLite.
