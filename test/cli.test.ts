@@ -43,10 +43,16 @@ test("dak branch-policy exits 0 without output for an allowed pull request", asy
 });
 
 test("dak branch-policy exits 1 and prints the reason to stderr for a rejected pull request", async () => {
-  await assert.rejects(run(process.execPath, [cliPath, "branch-policy", "feature/ci-cd", "main"]), (error: { code?: number; stdout?: string; stderr?: string }) => {
-    assert.equal(error.code, 1);
-    assert.equal(error.stdout, "");
-    assert.match(error.stderr ?? "", /^dak: A pull request into "main" must come from "develop" or a "hotfix\/\*" branch, not from "feature\/ci-cd"\./);
-    return true;
-  });
+  await assert.rejects(
+    run(process.execPath, [cliPath, "branch-policy", "feature/ci-cd", "main"]),
+    (error: { code?: number; stdout?: string; stderr?: string }) => {
+      assert.equal(error.code, 1);
+      assert.equal(error.stdout, "");
+      assert.match(
+        error.stderr ?? "",
+        /^dak: A pull request into "main" must come from "develop" or a "hotfix\/\*" branch, not from "feature\/ci-cd"\./,
+      );
+      return true;
+    },
+  );
 });
