@@ -9,6 +9,7 @@ import { defaultAuthDependencies, resolveAuth } from "./auth.ts";
 import { createClient, type ClientDependencies } from "./client.ts";
 import { defaultStorageDir, resolveSettings, type CliFlags, type Settings } from "./config.ts";
 import { ensureWritableDirectory, formatReport, runDoctor } from "./doctor.ts";
+import { createExecutionScope } from "./execution-scope.ts";
 import { cleanupOrphanedParts, createExportManager, type ExportManager } from "./export/manager.ts";
 import { startHttpServer } from "./http.ts";
 import { openLogRepository } from "./logging/repository.ts";
@@ -65,6 +66,7 @@ function authRequest(settings: Settings) {
 async function runMcp(settings: Settings): Promise<void> {
   const repository = await openLogRepository(join(settings.storageDir, "logs.db"));
   const logs = createLogService({ repository, transport: settings.transport, level: settings.logLevel });
+  const scope = createExecutionScope(logs);
   // Orphan .part files need no credentials, so they are removed at startup without blocking it.
   void cleanupOrphanedParts(settings.exportDir).catch((error: unknown) => logs.lifecycle.warn("Export cleanup failed", { dir: settings.exportDir }, error));
   // Set once the services exist, so shutdown never triggers credential resolution just to close the exports.
@@ -90,8 +92,9 @@ async function runMcp(settings: Settings): Promise<void> {
       maxResultBytes: 100_000,
       maxExportBytes: settings.exportMaxBytes,
       resolveWarehouse: warehouses.resolve,
+      scope,
     });
-    const exports = createExportManager({ statements, fetch: clientDependencies.fetch, dir: settings.exportDir, logs, sleep: clientDependencies.sleep });
+    const exports = createExportManager({ statements, fetch: clientDependencies.fetch, dir: settings.exportDir, scope, sleep: clientDependencies.sleep });
     createdExports = exports;
     return { warehouses, statements, metadata: createMetadataService(client, statements), exports };
   });
@@ -99,7 +102,7 @@ async function runMcp(settings: Settings): Promise<void> {
   const statements = lazy<StatementLifecycle>(async () => (await services()).statements);
   const metadata = lazy<MetadataService>(async () => (await services()).metadata);
   const exports = lazy<ExportManager>(async () => (await services()).exports);
-  const factory = () => createMcpServer({ warehouses, statements, metadata, exports, logs, repository, version, allowWrites: settings.allowWrites });
+  const factory = () => createMcpServer({ warehouses, statements, metadata, exports, scope, logs, repository, version, allowWrites: settings.allowWrites });
 
   let stopTransport: () => Promise<void>;
   try {

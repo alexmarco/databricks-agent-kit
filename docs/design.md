@@ -176,8 +176,10 @@ Implements the logging specification v1.0 provided by the user (persistence, tra
 ### 6.1 Components
 
 ```text
-MCP runtime (tools, resources) -> LogService -> in-memory FIFO queue -> BatchWriter -> SQLite repository -> logs.db
+MCP runtime (tools, resources) -> execution scope -> LogService -> in-memory FIFO queue -> BatchWriter -> SQLite repository -> logs.db
 ```
+
+- **Execution scope (`src/execution-scope.ts`, ADR 0013):** the only place that opens an execution, runs work with it as the current one, writes the single final entry and ends the execution as `completed`, `failed` or `cancelled`. Tool calls, recorded resource reads and background exports run through it; the log service stays a plain writer.
 
 - **SQLite driver:** `node:sqlite` (built into Node.js, no native module) instead of `better-sqlite3`. Node.js flags it as experimental; its startup warning is suppressed and the repository interface isolates the driver if it ever has to change.
 - **Event generation:** small in-house logger (levels, category, source, metadata, stack trace) instead of `pino`. Nothing is ever written to stdout.
@@ -188,7 +190,7 @@ As specified: `Execution` (`executionId`, `startedAt`, `finishedAt?`, `transport
 
 ### 6.3 Flow
 
-- Every tool call opens an execution (`started`), logs its events, and closes it as `completed`, `failed` or `cancelled`. Each export runs as a further execution of its own (tool name `export`), because it outlives the call that started it. Reads of the `resource://logs/*` resources are not recorded, so diagnosing does not inflate the statistics.
+- Every tool call opens an execution (`started`), logs its events, and closes it as `completed`, `failed` or `cancelled`, always through the execution scope (`scope.run`, ADR 0013). Each export runs as a further execution of its own (tool name `export`), because it outlives the call that started it. Reads of the `resource://logs/*` resources are not recorded, so diagnosing does not inflate the statistics.
 - Server-level events (startup, shutdown, purge, transport errors) belong to one **lifecycle execution** per process, because `logs.execution_id` is mandatory.
 - Execution inserts/updates and log entries all go through the same FIFO queue, so a log entry is never written before its execution row.
 - Flush when 100 events are pending or 5 s have passed since the last flush; each flush is one transaction. The queue is also flushed on shutdown (`SIGINT`, `SIGTERM`, stdin end, `beforeExit`) to keep the loss window to an abrupt crash.
@@ -223,7 +225,9 @@ ADR 0007. Structured events, correlation by identifier, levels with meaning, not
 | Export start and end                | `info`                        | Format, rows, chunks, bytes, duration; a failure is `warn` or `error` by the rule above; per-chunk detail only at `debug` |
 | HTTP `401` of the MCP transport     | `warn`, at most once a minute | Counter of suppressed events; never the token or headers                                                                  |
 
-A failed tool call writes exactly one entry: `ExecutionHandle.fail(error, metadata?)` logs the error at the level above with the same arguments, duration and diagnostics that the `info` entry of a successful call carries, so there is never an `info` entry and a failure entry for the same call.
+A failed tool call writes exactly one entry: the execution scope ends the execution with `ExecutionHandle.fail(error, metadata?)`, which logs the error at the level above with the same arguments, duration and diagnostics that the `info` entry of a successful call carries, so there is never an `info` entry and a failure entry for the same call. This holds where it is implemented, in `scope.run`, not by convention in each caller.
+
+**Diagnostics.** `checkMs` (duration of the read-only check) and `warehouseId` (warehouse of an export) are not passed through signatures. The code that knows them calls `scope.annotate(...)`: the statement lifecycle after the check and when it submits an export. `annotate` adds them to the final entry of the current scope, found with `logs.current()` like the "warehouse chosen" event finds its execution; scopes running concurrently keep separate diagnostics and outside a scope `annotate` does nothing. The final status of a scope follows the outcome of its work: it resolves (`completed`), throws `ExecutionCancelled` (`cancelled`, no entry, used by a cancelled export job) or throws anything else (`failed`).
 
 ## 7. Repository layout
 
@@ -238,6 +242,7 @@ databricks-agent-kit/
     client.ts             # fetch wrapper, retries, error mapping
     statements.ts         # statement lifecycle: submit, read-only policy, polling, cancel, result shaping (ADR 0009)
     statement-lookup.ts   # get_statement: one answer for any statement id, export or plain (ADR 0011)
+    execution-scope.ts    # execution scope: open an execution, run work in it, the single final entry and status (ADR 0013)
     warehouses.ts         # warehouse selection: explicit, configured and automatic choice, listing (ADR 0012)
     metadata.ts           # catalogs, schemas, tables, search, lineage
     export/               # background export jobs: chunk download, csv, parquet, sqlite

@@ -4,6 +4,7 @@ import fsPromises, { access, mkdir, readFile, rm, utimes, writeFile } from "node
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { InvalidArgumentError } from "../src/errors.ts";
+import { createExecutionScope } from "../src/execution-scope.ts";
 import { cleanupOrphanedParts, createExportManager, type ExportManagerDependencies } from "../src/export/manager.ts";
 import type { ChunkSink, ExportFormat, ExportState, SinkContext } from "../src/export/types.ts";
 import type { LogService } from "../src/logging/service.ts";
@@ -137,7 +138,7 @@ function managerDeps(
 ): ExportManagerDependencies {
   return {
     dir: join(dir, "exports"),
-    logs,
+    scope: createExecutionScope(logs),
     sleep: async () => undefined,
     ...overrides,
   };
@@ -471,6 +472,39 @@ test("a successful export logs start and finish with rows", async () => {
   });
 });
 
+test("the log execution of an export ends completed, failed or cancelled with its job", async () => {
+  await withLogs("stdio", async ({ repository, logs, dir }) => {
+    const statusOf = (id: string) => {
+      logs.flush();
+      return repository.recentExecutions(50).find((execution) => execution.toolName === "export" && execution.executionId === id)?.status;
+    };
+    const exportExecutionIds = () => {
+      logs.flush();
+      return repository.recentExecutions(50).filter((execution) => execution.toolName === "export").map((execution) => execution.executionId);
+    };
+
+    const done = createExportManager(managerDeps(logs, dir, { statements: fakeStatements({ chunks: 1 }).statements, fetch: fakeFetch().fetch, sinks: { csv: fakeSink().factory } }));
+    await done.start(exportRequest());
+    await done.wait(STATEMENT_ID, 1000);
+    const [completedId] = exportExecutionIds();
+    assert.equal(statusOf(completedId!), "completed");
+
+    const failing = createExportManager(managerDeps(logs, dir, { statements: fakeStatements({ chunks: 1, state: "FAILED" }).statements, fetch: fakeFetch().fetch, sinks: { csv: fakeSink().factory } }));
+    await failing.start({ ...exportRequest(), name: "failing" });
+    await failing.wait(STATEMENT_ID, 1000);
+    const failedId = exportExecutionIds().find((id) => id !== completedId);
+    assert.equal(statusOf(failedId!), "failed");
+
+    const hanging = hangingFetch();
+    const cancelling = createExportManager(managerDeps(logs, dir, { statements: fakeStatements({ chunks: 1 }).statements, fetch: hanging.fetch, sinks: { csv: fakeSink().factory } }));
+    await cancelling.start({ ...exportRequest(), name: "cancelling" });
+    await waitFor(() => hanging.calls.length === 1);
+    await cancelling.cancel(STATEMENT_ID);
+    const cancelledId = exportExecutionIds().find((id) => id !== completedId && id !== failedId);
+    assert.equal(statusOf(cancelledId!), "cancelled");
+  });
+});
+
 /** Status per URL: the first `failures` downloads of chunk `index` get `failure`, every other one 200. */
 function failingFirst(index: number, failures: number, failure: number) {
   let calls = 0;
@@ -756,26 +790,6 @@ test("cleanup skips an entry removed between listing and stat, and keeps going",
     }
 
     assert.equal(await exists(join(exportDir, "b.csv.part")), false);
-  });
-});
-
-test("start passes the caller's diagnostics to submitExport", async () => {
-  await withLogs("stdio", async ({ logs, dir }) => {
-    const received: unknown[] = [];
-    const statements = {
-      ...fakeStatements({ chunks: 1 }).statements,
-      submitExport: async (_request: unknown, _format: unknown, diagnostics?: { checkMs?: number; warehouseId?: string }) => {
-        received.push(diagnostics);
-        if (diagnostics !== undefined) Object.assign(diagnostics, { checkMs: 4, warehouseId: "wh1" });
-        return { statementId: STATEMENT_ID, warehouseId: "wh1" };
-      },
-    };
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: fakeSink().factory } }));
-    const diagnostics: { checkMs?: number; warehouseId?: string } = {};
-    await manager.start(exportRequest(), diagnostics);
-    assert.deepEqual(diagnostics, { checkMs: 4, warehouseId: "wh1" });
-    assert.equal(received[0], diagnostics);
-    await manager.wait(STATEMENT_ID, 1000);
   });
 });
 

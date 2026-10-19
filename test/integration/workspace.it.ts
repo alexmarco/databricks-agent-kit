@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { defaultAuthDependencies, resolveAuth } from "../../src/auth.ts";
 import { createClient, type ClientDependencies } from "../../src/client.ts";
+import { createExecutionScope } from "../../src/execution-scope.ts";
 import { createExportManager } from "../../src/export/manager.ts";
 import type { ExportFormat, ExportState } from "../../src/export/types.ts";
 import { openLogRepository } from "../../src/logging/repository.ts";
@@ -46,7 +47,8 @@ const metadata = createMetadataService(client, statements);
 const workDir = await mkdtemp(join(tmpdir(), "dak-it-"));
 const exportDir = join(workDir, "exports");
 const logs = createLogService({ repository: await openLogRepository(join(workDir, "logs.db")), transport: "stdio", level: "info" });
-const exports = createExportManager({ statements, fetch: clientDependencies.fetch, dir: exportDir, logs, sleep: clientDependencies.sleep });
+const scope = createExecutionScope(logs);
+const exports = createExportManager({ statements, fetch: clientDependencies.fetch, dir: exportDir, scope, sleep: clientDependencies.sleep });
 
 /** Statements started by the export tests; `afterEach` cancels them in Databricks whatever the outcome of the test. */
 const startedStatements = new Set<string>();

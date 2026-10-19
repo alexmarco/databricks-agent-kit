@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import type { ExecutionDiagnostics } from "../src/execution-scope.ts";
 import { createStatementLifecycle, isReadCommand, ReadOnlyViolationError, SqlError, type StatementLifecycleOptions } from "../src/statements.ts";
 import type { DatabricksClient, QueryValue } from "../src/client.ts";
 
@@ -312,26 +313,31 @@ test("writes mode and server-written SQL skip the read-only check", async () => 
   assert.equal(internal.calls.length, 1);
 });
 
-test("submit fills the diagnostics with the duration of the read-only check", async () => {
+/** Scope that records what the lifecycle reports for the final log entry. */
+function recordingScope() {
+  const reported: ExecutionDiagnostics[] = [];
+  return { scope: { annotate: (diagnostics: ExecutionDiagnostics) => void reported.push(diagnostics) }, reported: () => Object.assign({}, ...reported) as ExecutionDiagnostics };
+}
+
+test("submit reports the duration of the read-only check to the scope", async () => {
   let clock = 1000;
   const { client } = warehouse(described("id"));
-  const lifecycle = createStatementLifecycle(client, { ...readOnly, now: () => (clock += 7) });
-  const diagnostics: { checkMs?: number } = {};
-  await lifecycle.submit({ statement: "SELECT 1" }, "agent", diagnostics);
-  assert.equal(diagnostics.checkMs, 7);
+  const { scope, reported } = recordingScope();
+  await createStatementLifecycle(client, { ...readOnly, scope, now: () => (clock += 7) }).submit({ statement: "SELECT 1" }, "agent");
+  assert.deepEqual(reported(), { checkMs: 7 });
 });
 
-test("diagnostics stay empty when no check ran", async () => {
+test("submit reports nothing when no check ran", async () => {
   const { client } = warehouse(described("id"));
-  const fast: { checkMs?: number } = {};
-  await createStatementLifecycle(client, readOnly).submit({ statement: "SHOW TABLES" }, "agent", fast);
-  assert.deepEqual(fast, {});
-  const writes: { checkMs?: number } = {};
-  await createStatementLifecycle(client, options).submit({ statement: "SELECT 1" }, "agent", writes);
-  assert.deepEqual(writes, {});
-  const server: { checkMs?: number } = {};
-  await createStatementLifecycle(client, readOnly).submit({ statement: "SELECT 1" }, "server", server);
-  assert.deepEqual(server, {});
+  const fast = recordingScope();
+  await createStatementLifecycle(client, { ...readOnly, scope: fast.scope }).submit({ statement: "SHOW TABLES" }, "agent");
+  assert.deepEqual(fast.reported(), {});
+  const writes = recordingScope();
+  await createStatementLifecycle(client, { ...options, scope: writes.scope }).submit({ statement: "SELECT 1" }, "agent");
+  assert.deepEqual(writes.reported(), {});
+  const server = recordingScope();
+  await createStatementLifecycle(client, { ...readOnly, scope: server.scope }).submit({ statement: "SELECT 1" }, "server");
+  assert.deepEqual(server.reported(), {});
 });
 
 test("get and cancel call the statement endpoints", async () => {
@@ -499,19 +505,18 @@ test("submitExport applies the read-only check before posting", async () => {
   assert.equal((accepted.calls[1]!.payload as { disposition: string }).disposition, "EXTERNAL_LINKS");
 });
 
-test("submitExport fills the diagnostics with the check duration and the warehouse", async () => {
+test("submitExport reports the check duration and the warehouse to the scope", async () => {
   let clock = 1000;
   const checked = fakeClient((_method, _path, payload) =>
     (payload as { statement: string }).statement.startsWith("DESCRIBE QUERY ") ? described("id") : { statement_id: "ex3", status: { state: "PENDING" } },
   );
-  const diagnostics: { checkMs?: number; warehouseId?: string } = {};
-  await createStatementLifecycle(checked.client, { ...readOnly, now: () => (clock += 5) }).submitExport({ statement: "SELECT 1" }, "csv", diagnostics);
-  assert.equal(diagnostics.checkMs, 5);
-  assert.equal(diagnostics.warehouseId, "wh-default");
+  const withCheck = recordingScope();
+  await createStatementLifecycle(checked.client, { ...readOnly, scope: withCheck.scope, now: () => (clock += 5) }).submitExport({ statement: "SELECT 1" }, "csv");
+  assert.deepEqual(withCheck.reported(), { checkMs: 5, warehouseId: "wh-default" });
 
-  const unchecked: { checkMs?: number; warehouseId?: string } = {};
-  const submitted = await createStatementLifecycle(checked.client, readOnly).submitExport({ statement: "SHOW TABLES" }, "csv", unchecked);
-  assert.deepEqual(unchecked, { warehouseId: submitted.warehouseId });
+  const withoutCheck = recordingScope();
+  const submitted = await createStatementLifecycle(checked.client, { ...readOnly, scope: withoutCheck.scope }).submitExport({ statement: "SHOW TABLES" }, "csv");
+  assert.deepEqual(withoutCheck.reported(), { warehouseId: submitted.warehouseId });
 });
 
 const exportSucceeded = (extra: Record<string, unknown> = {}) => ({

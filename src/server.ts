@@ -1,6 +1,7 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { DakError } from "./errors.ts";
+import type { ExecutionScope } from "./execution-scope.ts";
 import type { ExportManager } from "./export/manager.ts";
 import { describeArguments } from "./logging/arguments.ts";
 import type { LogRepository } from "./logging/repository.ts";
@@ -8,7 +9,7 @@ import type { LogService } from "./logging/service.ts";
 import type { MetadataService } from "./metadata.ts";
 import { createStatementLookup } from "./statement-lookup.ts";
 import type { WarehouseSelection } from "./warehouses.ts";
-import type { ExecutionDiagnostics, StatementLifecycle } from "./statements.ts";
+import type { StatementLifecycle } from "./statements.ts";
 
 /** Names of every tool the server registers. */
 export const TOOL_NAMES = ["list_objects", "describe_table", "search_metadata", "execute_sql", "get_statement"] as const;
@@ -20,6 +21,8 @@ export interface ServerDependencies {
   statements: StatementLifecycle;
   metadata: MetadataService;
   exports: ExportManager;
+  /** Opens the execution of each tool call, recorded resource read and export; the services annotate through it. */
+  scope: ExecutionScope;
   logs: LogService;
   repository: LogRepository;
   version: string;
@@ -54,13 +57,13 @@ function summarize(result: unknown): Record<string, unknown> {
 }
 
 /**
- * Builds the MCP server with its tools and resources. Every tool call is one execution that writes a single entry when
- * it ends: `info` on success, or the `warn`/`error` of `fail`; failures are returned to the agent as `isError` results
+ * Builds the MCP server with its tools and resources. Every tool call runs in the execution scope (ADR 0013), which writes a single entry when
+ * it ends: `info` on success, or the `warn`/`error` of the error class; failures are returned to the agent as `isError` results
  * with an actionable message. Reads of the log resources open no execution, so they do not inflate the statistics they
  * report; an unexpected error while reading them is logged on the lifecycle execution.
  */
 export function createMcpServer(deps: ServerDependencies): McpServer {
-  const { warehouses, statements, metadata, exports, logs, repository } = deps;
+  const { warehouses, statements, metadata, exports, scope, logs, repository } = deps;
   const lookup = createStatementLookup({ statements, exports });
   const server = new McpServer({ name: "databricks-agent-kit", version: deps.version }, { instructions: INSTRUCTIONS });
 
@@ -68,7 +71,7 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     name: (typeof TOOL_NAMES)[number],
     description: string,
     inputSchema: Schema,
-    run: (args: z.output<Schema>, diagnostics: ExecutionDiagnostics) => Promise<unknown>,
+    run: (args: z.output<Schema>) => Promise<unknown>,
   ) {
     const annotations =
       name === "execute_sql"
@@ -78,21 +81,16 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
           : { readOnlyHint: true };
     // The JSON Schema `$schema` URI tells the agent nothing and costs about 60 characters per tool in every session.
     server.registerTool(name, { description, inputSchema: inputSchema.meta({ $schema: undefined }), annotations }, (async (args: z.output<Schema>) => {
-      const execution = logs.startExecution({ toolName: name });
-      const startedAt = Date.now();
-      const diagnostics: ExecutionDiagnostics = {};
-      const entry = (result?: unknown) => ({ ...describeArguments(args as Record<string, unknown>), durationMs: Date.now() - startedAt, ...summarize(result), ...diagnostics });
-      return logs.run(execution, async () => {
-        try {
-          const result = await run(args, diagnostics);
-          execution.info("Tool call completed", entry(result));
-          execution.complete();
-          return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
-        } catch (error) {
-          execution.fail(error, entry());
-          return { isError: true, content: [{ type: "text" as const, text: errorMessage(error) }] };
-        }
-      });
+      try {
+        const result = await scope.run({ toolName: name }, () => run(args), {
+          message: "Tool call completed",
+          arguments: describeArguments(args as Record<string, unknown>),
+          summarize,
+        });
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      } catch (error) {
+        return { isError: true, content: [{ type: "text" as const, text: errorMessage(error) }] };
+      }
     }) as never);
   }
 
@@ -115,15 +113,7 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
           throw error;
         }
       }
-      const execution = logs.startExecution({ resourceUri: url.href });
-      try {
-        const payload = await logs.run(execution, async () => read(url, variables));
-        execution.complete();
-        return reply(payload);
-      } catch (error) {
-        execution.fail(error);
-        throw error;
-      }
+      return reply(await scope.run({ resourceUri: url.href }, async () => read(url, variables)));
     };
     const config = { title: name, description, mimeType: "application/json" };
     if (typeof uri === "string") server.registerResource(name, uri, config, (url) => handler(url));
@@ -160,10 +150,10 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
       warehouse_id: z.string().optional(),
       export: z.object({ format: z.enum(["csv", "parquet", "sqlite"]), name: z.string().max(64).optional() }).optional(),
     }),
-    async (args, diagnostics) => {
+    async (args) => {
       const request = { statement: args.statement, parameters: args.parameters, catalog: args.catalog, schema: args.schema, warehouseId: args.warehouse_id };
-      if (args.export === undefined) return statements.submit({ ...request, rowLimit: args.row_limit }, "agent", diagnostics);
-      const state = await exports.start({ statement: request, format: args.export.format, name: args.export.name }, diagnostics);
+      if (args.export === undefined) return statements.submit({ ...request, rowLimit: args.row_limit }, "agent");
+      const state = await exports.start({ statement: request, format: args.export.format, name: args.export.name });
       return { statementId: state.statementId, state: "PENDING", export: state };
     },
   );

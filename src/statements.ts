@@ -1,5 +1,6 @@
 import type { DatabricksClient } from "./client.ts";
 import { DakError } from "./errors.ts";
+import type { ExecutionScope } from "./execution-scope.ts";
 import { untilAborted } from "./abort.ts";
 import type { ExportFormat, ManifestColumn } from "./export/types.ts";
 
@@ -60,14 +61,6 @@ export interface StatementResult {
   message?: string;
 }
 
-/** Timings that {@link StatementLifecycle.submit} and {@link StatementLifecycle.submitExport} report to their caller. */
-export interface ExecutionDiagnostics {
-  /** Milliseconds spent in the read-only check; unset when no `DESCRIBE QUERY` call was needed. */
-  checkMs?: number;
-  /** Warehouse an export was submitted to; set by {@link StatementLifecycle.submitExport}. */
-  warehouseId?: string;
-}
-
 /** Presigned link to one result chunk of an export. It carries credentials in its URL: never log or return it. */
 export interface ExportChunkLink {
   url: string;
@@ -103,6 +96,8 @@ export interface StatementLifecycleOptions {
   maxExportBytes?: number;
   /** Warehouse that runs a statement: the requested one, or the default or automatic choice. */
   resolveWarehouse(explicit?: string): Promise<string>;
+  /** Receives the diagnostics of the call that runs the statement (read-only check duration, export warehouse); optional. */
+  scope?: Pick<ExecutionScope, "annotate">;
   /** Waits between polls of {@link StatementLifecycle.get}; replaceable in tests. */
   sleep?(ms: number): Promise<void>;
   /** Clock in milliseconds; replaceable in tests. */
@@ -291,9 +286,9 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
    * (see {@link isReadCommand}); the fast path has no comment handling because a scanner that disagrees with the
    * Databricks lexer could let a write through. A `;` before the end is rejected without any call, so the check itself
    * never submits several statements. Anything else is analysed by Databricks itself with `DESCRIBE QUERY`, which only
-   * parses queries. `diagnostics.checkMs` is set only when that call ran.
+   * parses queries. The duration of that call is reported to the scope as `checkMs`; nothing is reported when it did not run.
    */
-  async function assertReadOnly(body: StatementBody, diagnostics?: ExecutionDiagnostics): Promise<void> {
+  async function assertReadOnly(body: StatementBody): Promise<void> {
     if (INNER_SEMICOLON.test(body.statement)) {
       throw new ReadOnlyViolationError(
         `Read-only mode: the statement has several statements or a ';' inside a literal, and read-only mode cannot tell them apart. Pass literals that contain ';' as :name parameters. ${WRITES_HINT}`,
@@ -309,7 +304,7 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
       wait_timeout: "50s",
       on_wait_timeout: "CANCEL",
     });
-    if (diagnostics !== undefined) diagnostics.checkMs = now() - startedAt;
+    options.scope?.annotate({ checkMs: now() - startedAt });
     const { state } = check.status;
     if (state === "FAILED") {
       const error = statementError(check.status);
@@ -324,17 +319,17 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
   }
 
   /** Statements of the agent are checked unless writes are allowed; statements the server wrote itself never are. */
-  async function applyPolicy(body: StatementBody, origin: StatementOrigin, diagnostics?: ExecutionDiagnostics): Promise<void> {
-    if (origin === "agent" && !options.allowWrites) await assertReadOnly(body, diagnostics);
+  async function applyPolicy(body: StatementBody, origin: StatementOrigin): Promise<void> {
+    if (origin === "agent" && !options.allowWrites) await assertReadOnly(body);
   }
 
   /**
    * Submits a statement inline and waits up to 30 s for it. A statement still running is returned with its id and state
-   * for {@link get}. `diagnostics.checkMs` receives the duration of the read-only check when one ran.
+   * for {@link get}.
    */
-  async function submit(request: ExecuteSqlRequest, origin: StatementOrigin, diagnostics?: ExecutionDiagnostics): Promise<StatementResult> {
+  async function submit(request: ExecuteSqlRequest, origin: StatementOrigin): Promise<StatementResult> {
     const body = await statementBody(request);
-    await applyPolicy(body, origin, diagnostics);
+    await applyPolicy(body, origin);
     return shape(await client.post<ApiStatement>(STATEMENTS_PATH, body), body.row_limit ?? DEFAULT_ROW_LIMIT, body.warehouse_id);
   }
 
@@ -353,11 +348,11 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
 
   /**
    * Starts an export of the full result as EXTERNAL_LINKS and returns without waiting for it. Exports are the agent's
-   * statements, so the read-only policy is the same as in {@link submit}.
+   * statements, so the read-only policy is the same as in {@link submit}. The warehouse is reported to the scope.
    */
-  async function submitExport(request: ExecuteSqlRequest, format: ExportFormat, diagnostics?: ExecutionDiagnostics): Promise<{ statementId: string; warehouseId: string }> {
+  async function submitExport(request: ExecuteSqlRequest, format: ExportFormat): Promise<{ statementId: string; warehouseId: string }> {
     const { row_limit: _rowLimit, ...inlineBody } = await statementBody(request);
-    await applyPolicy(inlineBody, "agent", diagnostics);
+    await applyPolicy(inlineBody, "agent");
     const response = await client.post<ApiStatement>(STATEMENTS_PATH, {
       ...inlineBody,
       byte_limit: options.maxExportBytes ?? DEFAULT_EXPORT_BYTE_LIMIT,
@@ -367,7 +362,7 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
       format: EXPORT_RESULT_FORMAT[format],
     } satisfies StatementBody);
     if (response.status.state === "FAILED") throw statementError(response.status);
-    if (diagnostics !== undefined) diagnostics.warehouseId = inlineBody.warehouse_id;
+    options.scope?.annotate({ warehouseId: inlineBody.warehouse_id });
     return { statementId: response.statement_id, warehouseId: inlineBody.warehouse_id };
   }
 

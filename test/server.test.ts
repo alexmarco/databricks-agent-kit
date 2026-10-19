@@ -8,7 +8,7 @@ import type { LogRepository } from "../src/logging/repository.ts";
 import type { LogService } from "../src/logging/service.ts";
 
 async function connect(context: { repository: LogRepository; logs: LogService }) {
-  const services = fakeServices();
+  const services = fakeServices(context.logs);
   const server = createMcpServer({ ...services, logs: context.logs, repository: context.repository, version: "0.0.0-test" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -205,11 +205,11 @@ test("a tool call writes exactly one info entry with described arguments and the
   });
 });
 
-test("the read-only check duration reported by the statement lifecycle module is logged as checkMs", async () => {
+test("the diagnostics a service annotates during a tool call are logged on its final entry", async () => {
   await withLogs("stdio", async (context) => {
     const connection = await connect(context);
-    (connection.services.statements as unknown as { submit: (request: unknown, origin: string, diagnostics?: { checkMs?: number }) => Promise<unknown> }).submit = async (_request, _origin, diagnostics) => {
-      if (diagnostics !== undefined) diagnostics.checkMs = 42;
+    (connection.services.statements as unknown as { submit: () => Promise<unknown> }).submit = async () => {
+      connection.services.scope.annotate({ checkMs: 42 });
       return okResult;
     };
     await connection.client.callTool({ name: "execute_sql", arguments: { statement: "SELECT 1" } });
@@ -318,7 +318,7 @@ test("an unexpected error while reading a log resource is logged on the lifecycl
     repository.stats = () => {
       throw new Error("disk gone");
     };
-    const server = createMcpServer({ ...fakeServices(), logs: context.logs, repository, version: "0.0.0-test" });
+    const server = createMcpServer({ ...fakeServices(context.logs), logs: context.logs, repository, version: "0.0.0-test" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
     const client = new Client({ name: "test-client", version: "1.0.0" });

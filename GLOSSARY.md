@@ -32,4 +32,14 @@ Terms used in the code and the documents of `databricks-agent-kit`. Design vocab
 | **Statement lookup**     | The module (`src/statement-lookup.ts`, ADR 0011) that answers `get` and `cancel` for any statement id: an id the export manager knows is an export, any other id is a plain statement.        |
 | **Warehouse selection**  | The module (`src/warehouses.ts`, ADR 0012) that owns which SQL warehouse is used: `resolve(explicit?)` and `list()`. Rule order: explicit, configured, automatic.   |
 | **Automatic choice**     | The warehouse picked when none is explicit or configured: a running one, else a serverless one, else the first accessible. Remembered once made and reported once with its reason (`running`, `serverless`, `first`). |
-| **Diagnostics**          | `checkMs` and `warehouseId`, filled by the module for the final log entry of a tool call (an out-parameter until the execution scope module replaces it).         |
+| **Diagnostics**          | `checkMs` and `warehouseId`, reported with `scope.annotate` by the statement lifecycle for the final log entry of the current scope (ADR 0013).                   |
+
+## Execution scope
+
+| Term                 | Meaning                                                                                                                                                                                              |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Execution**        | One recorded unit of work in the log: a tool call, a recorded resource read, a background export, or the server lifecycle. It ends `completed`, `failed` or `cancelled`.                              |
+| **Execution scope**  | The module (`src/execution-scope.ts`, ADR 0013) that opens an execution, runs work with it as the current one, writes the single final entry and sets the final status. `scope.run` is its entry point. |
+| **Current scope**    | The execution of the running `scope.run` (and its awaits), as `logs.current()` reports it; `scope.annotate` and the log events of the services find their execution through it.                       |
+| **Final entry**      | The single entry a scope writes when it ends: `info` on success, `warn` without stack trace for a `DakError`, `error` with stack trace otherwise; same arguments, duration and diagnostics in both. |
+| **Cancelled**        | Final status of a scope whose work threw `ExecutionCancelled`; it writes no entry.                                                                                                                   |
