@@ -20,6 +20,7 @@
     "lint": "biome lint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\"",
+    "test:coverage": "node --disable-warning=ExperimentalWarning --test --experimental-test-coverage --test-coverage-lines=95 --test-coverage-branches=85 --test-coverage-functions=90 \"test/**/*.test.ts\"",
     "test:integration": "node --disable-warning=ExperimentalWarning --test \"test/integration/*.it.ts\""
   },
   "dependencies": {
