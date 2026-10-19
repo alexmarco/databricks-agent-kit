@@ -1,5 +1,6 @@
 import type { AuthMethod, AuthProvider, FetchLike } from "./auth.ts";
 import type { ClientDependencies, DatabricksClient } from "./client.ts";
+import { DakError } from "./errors.ts";
 import { createExecutionScope, type ExecutionScope } from "./execution-scope.ts";
 import { createExportManager, type ExportManager } from "./export/manager.ts";
 import type { LogService } from "./logging/service.ts";
@@ -57,7 +58,10 @@ export interface WorkspaceSession {
   workspace(): Promise<Workspace>;
   /** The execution scope shared by the lifecycle, the export manager and the MCP server. */
   scope: ExecutionScope;
-  /** Cancels the running exports; resolves no credentials when no workspace was created. */
+  /**
+   * Waits for a workspace that is being built, cancels its running exports and closes the session: later `workspace()`
+   * calls and export starts are refused (ADR 0015). Resolves no credentials when no workspace was created.
+   */
   close(): Promise<void>;
 }
 
@@ -95,17 +99,17 @@ export async function connectWorkspace(adapters: WorkspaceAdapters, options: Con
 export function createWorkspaceSession(adapters: WorkspaceAdapters, options: WorkspaceSessionOptions): WorkspaceSession {
   const scope = createExecutionScope(options.logs);
   let pending: Promise<Workspace> | undefined;
-  let created: Workspace | undefined;
+  let closed = false;
 
   const build = async (): Promise<Workspace> => {
     const connection = await connectWorkspace(adapters, { warehouseId: options.warehouseId, limits: options.limits, logging: { logs: options.logs, scope } });
     const exports = createExportManager({ statements: connection.statements, fetch: adapters.fetch, dir: options.exportDir, scope, sleep: adapters.sleep });
-    created = { ...connection, metadata: createMetadataService(connection.client, connection.statements), exports };
-    return created;
+    return { ...connection, metadata: createMetadataService(connection.client, connection.statements), exports };
   };
 
   return {
     workspace: () => {
+      if (closed) return Promise.reject(new DakError("SHUTTING_DOWN", "The server is shutting down."));
       pending ??= build().catch((error: unknown) => {
         pending = undefined;
         throw error;
@@ -114,7 +118,10 @@ export function createWorkspaceSession(adapters: WorkspaceAdapters, options: Wor
     },
     scope,
     close: async () => {
-      await created?.exports.close();
+      closed = true;
+      // A build in flight is awaited, so its exports are closed too; a failed one has nothing to close.
+      const workspace = await pending?.catch(() => undefined);
+      await workspace?.exports.close();
     },
   };
 }

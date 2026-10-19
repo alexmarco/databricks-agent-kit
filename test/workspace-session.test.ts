@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import type { AuthProvider } from "../src/auth.ts";
 import type { DatabricksClient, QueryValue } from "../src/client.ts";
-import { AuthError } from "../src/errors.ts";
+import { AuthError, DakError } from "../src/errors.ts";
 import { ReadOnlyViolationError } from "../src/statements.ts";
 import { connectWorkspace, createWorkspaceSession, type WorkspaceAdapters, type WorkspaceLimits } from "../src/workspace-session.ts";
 import { withLogs } from "./helpers.ts";
@@ -114,6 +114,46 @@ test("closing cancels a running export together with its Databricks statement", 
       ["/api/2.0/sql/statements/st-export/cancel"],
     );
     assert.equal((await exports.get("st-export"))?.status, "CANCELED");
+  });
+});
+
+test("closing while the first workspace is being built waits for it, and no export can start on it afterwards", async () => {
+  await withLogs("stdio", async ({ logs, dir }) => {
+    const { adapters: fake, state, workspace } = adapters();
+    let release: () => void = () => undefined;
+    const slowCredentials = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const session = createWorkspaceSession({ ...fake, resolveAuth: async (onRefresh) => (await slowCredentials, fake.resolveAuth(onRefresh)) }, sessionOptions(dir, logs));
+
+    const building = session.workspace();
+    let closed = false;
+    const closing = session.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(closed, false, "close waits for the pending build");
+
+    release();
+    const { exports } = await building;
+    await closing;
+    await assert.rejects(exports.start({ statement: { statement: "SELECT 1" }, format: "csv" }), (error: unknown) => error instanceof DakError && /shutting down/.test(error.message));
+    assert.equal(workspace.calls.filter((call) => call.method === "POST").length, 0);
+    await assert.rejects(session.workspace(), (error: unknown) => error instanceof DakError && /shutting down/.test(error.message));
+    assert.equal(state.resolutions, 1);
+  });
+});
+
+test("closing while the first build fails does not retry it and refuses later calls", async () => {
+  await withLogs("stdio", async ({ logs, dir }) => {
+    const { adapters: fake, state } = adapters(undefined, 1);
+    const session = createWorkspaceSession(fake, sessionOptions(dir, logs));
+    const building = session.workspace();
+    const rejected = assert.rejects(building, AuthError);
+    await session.close();
+    await rejected;
+    await assert.rejects(session.workspace(), DakError);
+    assert.equal(state.resolutions, 1);
   });
 });
 
