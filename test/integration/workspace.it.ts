@@ -1,6 +1,7 @@
 /**
  * Integration tests against a real Databricks workspace.
  * Run with: DAK_IT_PROFILE=<profile> npm run test:integration
+ * or with DATABRICKS_HOST, DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET set (takes precedence over the profile).
  * Optional: DAK_IT_TABLE (default samples.nyctaxi.trips), DATABRICKS_WAREHOUSE_ID.
  */
 import { after, afterEach, test } from "node:test";
@@ -18,12 +19,10 @@ import { openLogRepository } from "../../src/logging/repository.ts";
 import { createLogService } from "../../src/logging/service.ts";
 import { createMetadataService } from "../../src/metadata.ts";
 import { createWarehouseSelection } from "../../src/warehouses.ts";
+import { selectIntegrationConnection } from "./connection.ts";
 import { createStatementLifecycle, ReadOnlyViolationError, type StatementResult } from "../../src/statements.ts";
 
-const profile = process.env.DAK_IT_PROFILE;
-if (profile === undefined || profile === "") {
-  throw new Error("Set DAK_IT_PROFILE to the Databricks CLI profile used for integration tests.");
-}
+const connection = selectIntegrationConnection(process.env);
 const table = process.env.DAK_IT_TABLE ?? "samples.nyctaxi.trips";
 /** Target of the write attempts below; it never exists, so even an executed DROP ... IF EXISTS changes nothing. */
 const NEVER_EXISTS = "main.default.dak_it_never_exists";
@@ -40,10 +39,7 @@ const MULTI_STATEMENT_REJECTIONS = [
   /mismatched input/i,
 ];
 
-const auth = await resolveAuth(
-  { profile, explicitProfile: true, env: process.env },
-  defaultAuthDependencies(process.env),
-);
+const auth = await resolveAuth(connection, defaultAuthDependencies(process.env));
 const clientDependencies: ClientDependencies = {
   fetch: (input, init) => fetch(input, init),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
