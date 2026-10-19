@@ -43,3 +43,13 @@ Terms used in the code and the documents of `databricks-agent-kit`. Design vocab
 | **Current scope**    | The execution of the running `scope.run` (and its awaits), as `logs.current()` reports it; `scope.annotate` and the log events of the services find their execution through it.                       |
 | **Final entry**      | The single entry a scope writes when it ends: `info` on success, `warn` without stack trace for a `DakError`, `error` with stack trace otherwise; same arguments, duration and diagnostics in both. |
 | **Cancelled**        | Final status of a scope whose work threw `ExecutionCancelled`; it writes no entry.                                                                                                                   |
+
+## Workspace session
+
+| Term                    | Meaning                                                                                                                                                                                              |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Workspace session**   | The module (`src/workspace-session.ts`, ADR 0014) that owns lazy credential resolution, construction of the Databricks modules from settings, their log hooks and closing. `createWorkspaceSession` is the server's entry point. |
+| **Workspace**           | What `session.workspace()` gives: the credentials (`auth`), `client`, `warehouses`, `statements`, `metadata` and `exports` of one session, built once and reused.                                      |
+| **Workspace connection** | The part of the workspace that `connectWorkspace` builds without a log service: `auth`, `client`, `warehouses` and `statements`. `dak doctor` uses it with its smaller `DOCTOR_LIMITS`.           |
+| **Adapters**            | The `WorkspaceAdapters` of a session: `resolveAuth`, `createClient`, `fetch` and `sleep`, real in `src/cli.ts` and fakes in tests.                                                                   |
+| **Closing**             | `session.close()`: cancels the running exports and their Databricks statements; it never resolves credentials, so a session that created nothing closes without touching Databricks.                |
