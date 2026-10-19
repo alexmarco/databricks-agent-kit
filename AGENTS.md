@@ -8,14 +8,12 @@ Instructions for coding agents and contributors working on `databricks-agent-kit
 
 ## Project map
 
-| Path                | Content                                                                   |
-| ------------------- | ------------------------------------------------------------------------- |
-| `src/`              | TypeScript sources (ESM, run with Node.js type stripping, built by `tsc`) |
-| `test/`             | `node:test` suites; `test/integration/` needs a real workspace            |
-| `docs/design.md`    | Current design                                                            |
-| `docs/adr/`         | Architecture decision records, indexed in its `README.md`                 |
-| `superpowers/spec/` | Design specs of each iteration                                            |
-| `superpowers/plan/` | Implementation plans of each iteration                                    |
+| Path             | Content                                                                   |
+| ---------------- | ------------------------------------------------------------------------- |
+| `src/`           | TypeScript sources (ESM, run with Node.js type stripping, built by `tsc`) |
+| `test/`          | `node:test` suites; `test/integration/` needs a real workspace            |
+| `docs/design.md` | Current design                                                            |
+| `docs/adr/`      | Architecture decision records, indexed in its `README.md`                 |
 
 ## Commands
 

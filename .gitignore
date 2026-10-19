@@ -1,3 +1,16 @@
 node_modules/
 dist/
-.storage/
+
+# Dot-prefixed files and directories are local tooling, except configuration files
+.*
+!.gitignore
+!.gitattributes
+!.editorconfig
+!.prettierrc*
+!.prettierignore
+!.eslintrc*
+!.eslintignore
+!.markdownlint*
+!.nvmrc
+!.npmrc
+!.github/

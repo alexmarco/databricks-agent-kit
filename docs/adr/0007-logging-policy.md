@@ -21,7 +21,7 @@ The code review found that:
 - Reading `resource://logs/*` does not open executions.
 - The following are logged: retries (`warn`), the warehouse choice (`info`), token refresh and every HTTP request (`debug`), the start and end of each export (`info`) and HTTP `401` rejections (`warn`, limited to one per minute).
 
-Details in [section 7 of the export design](../../superpowers/spec/2026-10-19-export-and-tools-design.md).
+Details in [section 6 of the design](../design.md).
 
 ## Consequences
 
