@@ -1,6 +1,7 @@
 import type { DatabricksClient } from "./client.ts";
 import { DakError } from "./errors.ts";
-import type { ExportFormat } from "./export/types.ts";
+import { untilAborted } from "./abort.ts";
+import type { ExportFormat, ManifestColumn } from "./export/types.ts";
 
 /** Statement that Databricks failed to plan or run; the message keeps the error class and SQLSTATE. */
 export class SqlError extends DakError {
@@ -67,6 +68,26 @@ export interface ExecutionDiagnostics {
   warehouseId?: string;
 }
 
+/** Presigned link to one result chunk of an export. It carries credentials in its URL: never log or return it. */
+export interface ExportChunkLink {
+  url: string;
+  rowCount?: number | undefined;
+  /** ISO timestamp after which the link no longer works. */
+  expiration?: string | undefined;
+}
+
+/** What a finished export statement tells the export manager about its result. */
+export interface ExportResultInfo {
+  columns: ManifestColumn[];
+  chunkCount: number;
+  /** Row count of each chunk the manifest lists, by chunk index. */
+  chunkRowCounts: Map<number, number>;
+  /** True when Databricks cut the result at the byte limit. */
+  truncated: boolean;
+  /** Link of chunk 0 when the statement response carried it, so the first download needs no extra request. */
+  firstLink?: ExportChunkLink | undefined;
+}
+
 /** Who wrote a statement: only the agent's statements go through the read-only policy. */
 export type StatementOrigin = "agent" | "server";
 
@@ -119,6 +140,25 @@ interface ApiChunk {
   next_chunk_internal_link?: string;
 }
 
+interface ApiExternalLink {
+  chunk_index?: number;
+  row_count?: number;
+  external_link: string;
+  expiration?: string;
+}
+
+/** Response fields of an `EXTERNAL_LINKS` statement. */
+interface ApiExportStatement {
+  status: ApiStatement["status"];
+  manifest?: {
+    total_chunk_count?: number;
+    truncated?: boolean;
+    schema?: { columns?: ManifestColumn[] };
+    chunks?: Array<{ chunk_index: number; row_count?: number }>;
+  };
+  result?: { external_links?: ApiExternalLink[] };
+}
+
 const DEFAULT_ROW_LIMIT = 100;
 const STATEMENTS_PATH = "/api/2.0/sql/statements";
 const WRITES_HINT = "Start the server with --allow-writes (or DAK_ALLOW_WRITES=true) to allow it.";
@@ -133,6 +173,7 @@ const CHECK_ROW_LIMIT = 100;
 const CHECK_BYTE_LIMIT = 10_000_000;
 const DEFAULT_EXPORT_BYTE_LIMIT = 10 * 1024 ** 3;
 const MAX_WAIT_SECONDS = 30;
+const MAX_EXPORT_POLL_WAIT_MS = 10_000;
 const EXPORT_RESULT_FORMAT = { csv: "CSV", parquet: "ARROW_STREAM", sqlite: "JSON_ARRAY" } as const;
 
 /**
@@ -150,6 +191,22 @@ function statementError(status: ApiStatement["status"]): SqlError {
   const error = status.error ?? {};
   const sqlState = error.sql_state === undefined ? "" : ` (SQLSTATE ${error.sql_state})`;
   return new SqlError(`[${error.error_code ?? "FAILED"}] ${error.message ?? "Statement failed"}${sqlState}`);
+}
+
+function chunkLink(link: ApiExternalLink): ExportChunkLink {
+  return { url: link.external_link, rowCount: link.row_count, expiration: link.expiration };
+}
+
+function exportResultInfo(statement: ApiExportStatement): ExportResultInfo {
+  const inlineLink = statement.result?.external_links?.[0];
+  const rowCounts = (statement.manifest?.chunks ?? []).flatMap((chunk): Array<[number, number]> => (chunk.row_count === undefined ? [] : [[chunk.chunk_index, chunk.row_count]]));
+  return {
+    columns: statement.manifest?.schema?.columns ?? [],
+    chunkCount: statement.manifest?.total_chunk_count ?? 0,
+    chunkRowCounts: new Map(rowCounts),
+    truncated: statement.manifest?.truncated === true,
+    firstLink: inlineLink !== undefined && (inlineLink.chunk_index ?? 0) === 0 ? chunkLink(inlineLink) : undefined,
+  };
 }
 
 function capRowsByBytes(rows: Array<Array<string | null>>, maxBytes: number): Array<Array<string | null>> {
@@ -333,11 +390,31 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
     return shape(statement, Math.min(getOptions.rowLimit ?? options.maxRows, options.maxRows), undefined);
   }
 
+  /**
+   * Waits until an export statement has succeeded and describes its result. It polls with waits of 1 s, 2 s, 3 s...
+   * growing to 10 s, with no upper bound by design: a statement stuck in `PENDING` or `RUNNING` is polled until
+   * Databricks ends it or `signal` aborts, which rejects with the signal's reason and stops the polling. A statement
+   * that ends in any other state than `SUCCEEDED` is an error.
+   */
+  async function awaitExport(statementId: string, signal: AbortSignal): Promise<ExportResultInfo> {
+    const path = `${STATEMENTS_PATH}/${encodeURIComponent(statementId)}`;
+    for (let attempt = 1; ; attempt++) {
+      signal.throwIfAborted();
+      const statement = await untilAborted(client.get<ApiExportStatement>(path), signal);
+      const { state } = statement.status;
+      if (state === "SUCCEEDED") return exportResultInfo(statement);
+      if (state !== "PENDING" && state !== "RUNNING") {
+        throw new SqlError(statement.status.error?.message ?? `Export statement ended in state ${state}.`);
+      }
+      await untilAborted(sleep(Math.min(attempt * 1000, MAX_EXPORT_POLL_WAIT_MS)), signal);
+    }
+  }
+
   async function cancel(statementId: string): Promise<void> {
     await client.post(`${STATEMENTS_PATH}/${encodeURIComponent(statementId)}/cancel`);
   }
 
-  return { submit, query, submitExport, get, cancel };
+  return { submit, query, submitExport, awaitExport, get, cancel };
 }
 
 /** Methods returned by {@link createStatementLifecycle}. */

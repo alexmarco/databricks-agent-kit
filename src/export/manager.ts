@@ -1,5 +1,6 @@
 import { access, lstat, mkdir, readdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { untilAborted } from "../abort.ts";
 import type { FetchLike } from "../auth.ts";
 import type { DatabricksClient } from "../client.ts";
 import { InvalidArgumentError, messageWithoutUrls } from "../errors.ts";
@@ -93,16 +94,6 @@ const DEFAULT_SINKS: Record<ExportFormat, (context: SinkContext) => Promise<Chun
   parquet: createParquetSink,
   sqlite: (context) => createSqliteSink(context),
 };
-
-/** Settles like `promise`, or rejects as soon as `signal` aborts (the work itself keeps running unobserved). */
-function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  return new Promise<T>((settle, reject) => {
-    if (signal.aborted) return reject(signal.reason);
-    const onAbort = () => reject(signal.reason);
-    signal.addEventListener("abort", onAbort, { once: true });
-    promise.then(settle, reject).finally(() => signal.removeEventListener("abort", onAbort));
-  });
-}
 
 /**
  * Deletes `.part` entries of `dir` modified more than 24 hours before `now`; a missing directory is ignored. It needs
