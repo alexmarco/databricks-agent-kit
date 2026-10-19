@@ -4,7 +4,8 @@ import type { AuthProvider, FetchLike } from "./auth.ts";
 import type { DatabricksClient } from "./client.ts";
 import type { Settings } from "./config.ts";
 import { messageWithoutUrls } from "./errors.ts";
-import { createSqlService, type SqlService } from "./sql.ts";
+import { createSqlService } from "./sql.ts";
+import { createStatementLifecycle, type StatementLifecycle } from "./statements.ts";
 
 /** Outcome of a check: `fail` makes `dak doctor` exit with code 1, `warn` only marks an optional feature as unavailable. */
 export type CheckStatus = "ok" | "warn" | "fail" | "skip";
@@ -55,8 +56,8 @@ export async function ensureWritableDirectory(dir: string): Promise<void> {
   }
 }
 
-async function probe(sql: SqlService, statement: string, warehouseId: string): Promise<void> {
-  await sql.runStatement({ statement, warehouseId, rowLimit: 1 });
+async function probe(statements: StatementLifecycle, statement: string, warehouseId: string): Promise<void> {
+  await statements.submit({ statement, warehouseId, rowLimit: 1 }, "server");
 }
 
 interface ExportProbeStatement {
@@ -68,18 +69,18 @@ interface ExportProbeStatement {
  * Submits `SELECT 1` as an export and downloads its first link without credentials. The link points to cloud storage,
  * so a proxy or firewall that allows the workspace host can still block it. Only the host of the link is reported.
  */
-async function resultDownloadCheck(deps: DoctorDependencies, client: DatabricksClient, sql: SqlService, warehouseId: string): Promise<DoctorCheck> {
+async function resultDownloadCheck(deps: DoctorDependencies, client: DatabricksClient, statements: StatementLifecycle, warehouseId: string): Promise<DoctorCheck> {
   const name = "Result download";
   let link: string;
   let host: string;
   try {
-    const { statementId } = await sql.submitExport({ statement: "SELECT 1", warehouseId }, "csv");
+    const { statementId } = await statements.submitExport({ statement: "SELECT 1", warehouseId }, "csv");
     const path = `/api/2.0/sql/statements/${encodeURIComponent(statementId)}`;
     let statement = await client.get<ExportProbeStatement>(path);
     let waitedMs = 0;
     for (let attempt = 1; statement.status.state === "PENDING" || statement.status.state === "RUNNING"; attempt++) {
       if (waitedMs >= DOWNLOAD_WAIT_BUDGET_MS) {
-        await sql.cancelStatement(statementId).catch(() => undefined);
+        await statements.cancel(statementId).catch(() => undefined);
         return { name, status: "warn", detail: "warehouse still starting; the export did not finish in 60 s", next: "Run dak doctor again in a minute." };
       }
       const delayMs = Math.min(attempt * 1000, MAX_POLL_DELAY_MS);
@@ -119,6 +120,7 @@ async function remoteChecks(deps: DoctorDependencies, auth: AuthProvider): Promi
     defaultWarehouseId: deps.settings.warehouseId ?? auth.profileWarehouseId,
     maxResultBytes: 10_000,
   });
+  const statements = createStatementLifecycle(client, { maxRows: 10, allowWrites: false, maxResultBytes: 10_000, resolveWarehouse: sql.resolveWarehouse });
   const checks: DoctorCheck[] = [];
 
   try {
@@ -141,7 +143,7 @@ async function remoteChecks(deps: DoctorDependencies, auth: AuthProvider): Promi
 
   let sqlExecutionFailed = false;
   try {
-    const result = await sql.runStatement({ statement: "SELECT 1", warehouseId, rowLimit: 1 });
+    const result = await statements.submit({ statement: "SELECT 1", warehouseId, rowLimit: 1 }, "server");
     checks.push(
       result.state === "SUCCEEDED"
         ? { name: "SQL execution", status: "ok", detail: "SELECT 1 succeeded" }
@@ -153,14 +155,14 @@ async function remoteChecks(deps: DoctorDependencies, auth: AuthProvider): Promi
   }
 
   try {
-    await probe(sql, "SELECT 1 FROM system.information_schema.tables LIMIT 1", warehouseId);
+    await probe(statements, "SELECT 1 FROM system.information_schema.tables LIMIT 1", warehouseId);
     checks.push({ name: "information_schema", status: "ok", detail: "system.information_schema is readable" });
   } catch (error) {
     checks.push({ name: "information_schema", status: "warn", detail: messageOf(error), next: "search_metadata and describe_table tags need SELECT on system.information_schema." });
   }
 
   try {
-    await probe(sql, "SELECT 1 FROM system.access.table_lineage LIMIT 1", warehouseId);
+    await probe(statements, "SELECT 1 FROM system.access.table_lineage LIMIT 1", warehouseId);
     checks.push({ name: "Lineage system tables", status: "ok", detail: "system.access.table_lineage is readable" });
   } catch (error) {
     checks.push({
@@ -171,7 +173,7 @@ async function remoteChecks(deps: DoctorDependencies, auth: AuthProvider): Promi
     });
   }
 
-  checks.push(sqlExecutionFailed ? { name: "Result download", status: "skip", detail: "SQL execution failed" } : await resultDownloadCheck(deps, client, sql, warehouseId));
+  checks.push(sqlExecutionFailed ? { name: "Result download", status: "skip", detail: "SQL execution failed" } : await resultDownloadCheck(deps, client, statements, warehouseId));
   return checks;
 }
 
