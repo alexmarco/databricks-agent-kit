@@ -18,6 +18,7 @@
     "build": "tsc -p tsconfig.build.json",
     "format:check": "biome format .",
     "lint": "biome lint .",
+    "prepare": "husky",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\"",
     "test:coverage": "node --disable-warning=ExperimentalWarning --test --experimental-test-coverage --test-coverage-lines=95 --test-coverage-branches=85 --test-coverage-functions=90 \"test/**/*.test.ts\"",
@@ -32,8 +33,11 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
+    "@commitlint/cli": "21.2.4",
+    "@commitlint/config-conventional": "21.2.4",
     "@modelcontextprotocol/client": "^2.3.1",
     "@types/node": "^26.6.5",
+    "husky": "9.1.7",
     "typescript": "^7.0.2"
   }
 }
