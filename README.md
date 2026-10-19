@@ -15,7 +15,7 @@ Design: [docs/design.md](docs/design.md).
 
 ## Requirements
 
-- Node.js 22.13 or later (developed on Node.js 24). The log store uses the built-in `node:sqlite` module.
+- Node.js 22.18 or later (developed on Node.js 24). The log store uses the built-in `node:sqlite` module.
 - A Databricks workspace with Unity Catalog and at least one SQL warehouse you can use.
 - Databricks CLI 1.0.0 or later only if you authenticate with OAuth U2M (recommended for personal use) or install the
   official Databricks skills.

@@ -259,7 +259,7 @@ databricks-agent-kit/
   README.md
 ```
 
-Runtime dependencies: `@modelcontextprotocol/server` (MCP SDK v2), `@modelcontextprotocol/node` (HTTP transport), `commander`, `zod`, and `parquet-wasm` (Parquet export, pinned to an exact version). Dev: `typescript`, `@types/node`. Tests use the built-in `node:test`. Node.js >= 22.13 (`node:sqlite` unflagged); developed on Node.js 24.
+Runtime dependencies: `@modelcontextprotocol/server` (MCP SDK v2), `@modelcontextprotocol/node` (HTTP transport), `commander`, `zod`, and `parquet-wasm` (Parquet export, pinned to an exact version). Dev: `typescript`, `@types/node`. Tests use the built-in `node:test`. Node.js >= 22.18 (type stripping unflagged, `node:sqlite` unflagged); developed on Node.js 24.
 
 ## 8. README requirements
 
