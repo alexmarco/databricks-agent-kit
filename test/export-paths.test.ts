@@ -41,7 +41,7 @@ test("sanitizeExportName prefixes Windows reserved device names with an undersco
   assert.equal(sanitizeExportName("CONSOLE"), "CONSOLE");
   assert.equal(sanitizeExportName("COM10"), "COM10");
   assert.equal(sanitizeExportName("COM0"), "COM0");
-  assert.ok(sanitizeExportName("CON." + "a".repeat(100)).length <= 64);
+  assert.ok(sanitizeExportName(`CON.${"a".repeat(100)}`).length <= 64);
 });
 
 test("exportId joins the sanitized name and the full statement id", () => {

@@ -157,7 +157,13 @@ test("closing while the first workspace is being built waits for it, and no expo
       release = resolve;
     });
     const session = createWorkspaceSession(
-      { ...fake, resolveAuth: async (onRefresh) => (await slowCredentials, fake.resolveAuth(onRefresh)) },
+      {
+        ...fake,
+        resolveAuth: async (onRefresh) => {
+          await slowCredentials;
+          return fake.resolveAuth(onRefresh);
+        },
+      },
       sessionOptions(dir, logs),
     );
 
@@ -203,7 +209,8 @@ test("the workspace limits reach the statement lifecycle", async () => {
     const { adapters: fake, workspace } = adapters();
     const { statements } = await createWorkspaceSession(fake, sessionOptions(dir, logs)).workspace();
     await statements.submit({ statement: "SHOW TABLES", rowLimit: 1000 });
-    assert.equal((workspace.calls.find((call) => call.method === "POST")?.body as { row_limit: number }).row_limit, 50);
+    const submitted = workspace.calls.find((call) => call.method === "POST")?.body as { row_limit: number } | undefined;
+    assert.equal(submitted?.row_limit, 50);
     await assert.rejects(statements.submit({ statement: "SELECT 1; DROP TABLE t" }), ReadOnlyViolationError);
   });
 });

@@ -153,7 +153,7 @@ async function fileHandlePrototype(dir: string): Promise<FileHandlePrototype> {
 test("csv sink keeps every byte of a chunk even when single writes are short", async () => {
   await withTempDir(async (dir) => {
     const prototype = await fileHandlePrototype(dir);
-    const originalWrite = prototype["write"] as (this: FileHandle, buffer: Uint8Array) => Promise<unknown>;
+    const originalWrite = prototype.write as (this: FileHandle, buffer: Uint8Array) => Promise<unknown>;
     // Simulate a short write: only half of the requested bytes reach the file per call.
     const shortWrite = mock.method(prototype, "write", function (this: FileHandle, buffer: Uint8Array) {
       return originalWrite.call(this, buffer.subarray(0, Math.ceil(buffer.length / 2)));
@@ -196,7 +196,7 @@ test("csv sink abort after a failed write leaves no .part file", async () => {
 test("csv sink abort removes the .part file even when closing the handle fails", async () => {
   await withTempDir(async (dir) => {
     const prototype = await fileHandlePrototype(dir);
-    const originalAppendFile = prototype["appendFile"] as FileHandle["appendFile"];
+    const originalAppendFile = prototype.appendFile as FileHandle["appendFile"];
     let sinkHandle: FileHandle | undefined;
     // `close` is an own property of each handle, so capture the sink handle through a write and patch it.
     const capture = mock.method(prototype, "appendFile", function (this: FileHandle, data: Uint8Array) {

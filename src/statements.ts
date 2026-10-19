@@ -163,7 +163,7 @@ const WRITES_HINT = "Start the server with --allow-writes (or DAK_ALLOW_WRITES=t
  */
 const READ_COMMAND = /^[ \t\r\n]*(?:SHOW|DESCRIBE|DESC|EXPLAIN)(?![ \t\r\n]*:)(?:[ \t\r\n]|$)/i;
 /** A `;` before the last non-whitespace character: several statements, a script or a literal holding `;`. */
-const INNER_SEMICOLON = /;[^]*[^ \t\r\n]/;
+const INNER_SEMICOLON = /;[\s\S]*[^ \t\r\n]/;
 const CHECK_ROW_LIMIT = 100;
 const CHECK_BYTE_LIMIT = 10_000_000;
 const DEFAULT_EXPORT_BYTE_LIMIT = 10 * 1024 ** 3;

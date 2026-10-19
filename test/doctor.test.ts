@@ -1,6 +1,6 @@
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   ensureWritableDirectory,

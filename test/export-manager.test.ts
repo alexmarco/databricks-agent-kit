@@ -13,7 +13,6 @@ import { withLogs } from "./helpers.ts";
 
 const STATEMENT_ID = "01ef-statement";
 const HOUR_MS = 3_600_000;
-const encoder = new TextEncoder();
 
 interface StatementOptions {
   chunks: number;
