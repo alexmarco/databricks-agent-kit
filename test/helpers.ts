@@ -5,7 +5,7 @@ import { createExecutionScope } from "../src/execution-scope.ts";
 import type { ExportManager } from "../src/export/manager.ts";
 import type { ExportFormat, ExportState } from "../src/export/types.ts";
 import type { MetadataService } from "../src/metadata.ts";
-import type { SqlService } from "../src/sql.ts";
+import type { WarehouseSelection } from "../src/warehouses.ts";
 import type { ExecuteSqlRequest, StatementLifecycle, StatementResult } from "../src/statements.ts";
 import { SqlError } from "../src/statements.ts";
 import { openLogRepository, type LogRepository } from "../src/logging/repository.ts";
@@ -42,11 +42,10 @@ export function fakeServices(logs: LogService) {
       cancelledStatements.push(statementId);
     },
   } as unknown as StatementLifecycle;
-  const sql = {
-    runQuery: async () => okResult,
-    resolveWarehouse: async () => "wh1",
-    listWarehouses: async () => [{ id: "wh1", name: "Serverless", state: "RUNNING", size: "2X-Small", serverless: true, isDefault: true }],
-  } as unknown as SqlService;
+  const warehouses = {
+    resolve: async () => "wh1",
+    list: async () => [{ id: "wh1", name: "Serverless", state: "RUNNING", size: "2X-Small", serverless: true, isDefault: true }],
+  } as unknown as WarehouseSelection;
   const metadata = {
     listObjects: async (request: { catalog?: string; schema?: string }) => {
       if (request.catalog === undefined) return { level: "catalogs", items: [{ name: "main", comment: undefined }], truncated: false };
@@ -90,7 +89,7 @@ export function fakeServices(logs: LogService) {
     cleanup: async () => undefined,
     close: async () => undefined,
   };
-  return { sql, statements, metadata, exports, scope, exportStates, sqlRequests, getStatementCalls, cancelledStatements, exportCalls };
+  return { warehouses, statements, metadata, exports, scope, exportStates, sqlRequests, getStatementCalls, cancelledStatements, exportCalls };
 }
 
 export async function withLogs<T>(transport: ExecutionTransport, run: (context: { repository: LogRepository; logs: LogService; dir: string }) => Promise<T>): Promise<T> {

@@ -19,7 +19,7 @@ export interface ExportManagerDependencies {
   fetch: FetchLike;
   /** Export directory; a relative path is resolved against the working directory at creation. */
   dir: string;
-  /** Opens the log execution of each export job (ADR 0012). */
+  /** Opens the log execution of each export job (ADR 0013). */
   scope: Pick<ExecutionScope, "run">;
   sleep(ms: number): Promise<void>;
   /** Downloads in flight per export (default 4). */

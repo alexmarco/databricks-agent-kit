@@ -1,6 +1,6 @@
 import type { ExecutionHandle, ExecutionTarget, LogService } from "./logging/service.ts";
 
-/** Timings and choices that code running inside a scope reports for the final log entry of that scope (ADR 0012). */
+/** Timings and choices that code running inside a scope reports for the final log entry of that scope (ADR 0013). */
 export interface ExecutionDiagnostics {
   /** Milliseconds spent in the read-only check; unset when no `DESCRIBE QUERY` call was needed. */
   checkMs?: number;

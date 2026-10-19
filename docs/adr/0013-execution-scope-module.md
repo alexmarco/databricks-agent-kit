@@ -1,4 +1,4 @@
-# ADR 0012: Execution scope module
+# ADR 0013: Execution scope module
 
 - Status: Accepted
 - Date: 2026-10-19

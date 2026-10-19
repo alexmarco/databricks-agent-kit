@@ -8,7 +8,7 @@ import type { LogRepository } from "./logging/repository.ts";
 import type { LogService } from "./logging/service.ts";
 import type { MetadataService } from "./metadata.ts";
 import { createStatementLookup } from "./statement-lookup.ts";
-import type { SqlService } from "./sql.ts";
+import type { WarehouseSelection } from "./warehouses.ts";
 import type { StatementLifecycle } from "./statements.ts";
 
 /** Names of every tool the server registers. */
@@ -17,7 +17,7 @@ export const TOOL_NAMES = ["list_objects", "describe_table", "search_metadata", 
 /** Services behind the MCP tools and resources. */
 export interface ServerDependencies {
   /** Warehouse selection: the warehouses resource. */
-  sql: SqlService;
+  warehouses: WarehouseSelection;
   statements: StatementLifecycle;
   metadata: MetadataService;
   exports: ExportManager;
@@ -57,13 +57,13 @@ function summarize(result: unknown): Record<string, unknown> {
 }
 
 /**
- * Builds the MCP server with its tools and resources. Every tool call runs in the execution scope (ADR 0012), which writes a single entry when
+ * Builds the MCP server with its tools and resources. Every tool call runs in the execution scope (ADR 0013), which writes a single entry when
  * it ends: `info` on success, or the `warn`/`error` of the error class; failures are returned to the agent as `isError` results
  * with an actionable message. Reads of the log resources open no execution, so they do not inflate the statistics they
  * report; an unexpected error while reading them is logged on the lifecycle execution.
  */
 export function createMcpServer(deps: ServerDependencies): McpServer {
-  const { sql, statements, metadata, exports, scope, logs, repository } = deps;
+  const { warehouses, statements, metadata, exports, scope, logs, repository } = deps;
   const lookup = createStatementLookup({ statements, exports });
   const server = new McpServer({ name: "databricks-agent-kit", version: deps.version }, { instructions: INSTRUCTIONS });
 
@@ -165,7 +165,7 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
   );
 
   resource("warehouses", "resource://databricks/warehouses", "SQL warehouses visible to this identity and the default one.", true, async () => ({
-    warehouses: await sql.listWarehouses(),
+    warehouses: await warehouses.list(),
   }));
   resource("recent-errors", "resource://logs/errors/recent", "Most recent error and fatal log entries.", false, () => ({
     generatedAt: new Date().toISOString(),

@@ -17,7 +17,7 @@ import type { ExportFormat, ExportState } from "../../src/export/types.ts";
 import { openLogRepository } from "../../src/logging/repository.ts";
 import { createLogService } from "../../src/logging/service.ts";
 import { createMetadataService } from "../../src/metadata.ts";
-import { createSqlService } from "../../src/sql.ts";
+import { createWarehouseSelection } from "../../src/warehouses.ts";
 import { createStatementLifecycle, ReadOnlyViolationError, type StatementResult } from "../../src/statements.ts";
 
 const profile = process.env.DAK_IT_PROFILE;
@@ -37,8 +37,8 @@ const MULTI_STATEMENT_REJECTIONS = [/PARSE_SYNTAX_ERROR/i, /multiple statements/
 const auth = await resolveAuth({ profile, explicitProfile: true, env: process.env }, defaultAuthDependencies(process.env));
 const clientDependencies: ClientDependencies = { fetch: (input, init) => fetch(input, init), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) };
 const client = createClient(auth, clientDependencies);
-const sql = createSqlService(client, { defaultWarehouseId: process.env.DATABRICKS_WAREHOUSE_ID ?? auth.profileWarehouseId });
-const statementOptions = { maxRows: 100, maxResultBytes: 100_000, resolveWarehouse: sql.resolveWarehouse };
+const warehouseSelection = createWarehouseSelection(client, { defaultWarehouseId: process.env.DATABRICKS_WAREHOUSE_ID ?? auth.profileWarehouseId });
+const statementOptions = { maxRows: 100, maxResultBytes: 100_000, resolveWarehouse: warehouseSelection.resolve };
 const statements = createStatementLifecycle(client, { ...statementOptions, allowWrites: false });
 const writableStatements = createStatementLifecycle(client, { ...statementOptions, allowWrites: true });
 const metadata = createMetadataService(client, statements);
@@ -83,7 +83,7 @@ async function runExport(statement: string, format: ExportFormat, name: string):
 const partFiles = async () => (await readdir(exportDir)).filter((entry) => entry.endsWith(".part"));
 
 test("resolves a warehouse and runs SELECT 1", async () => {
-  const warehouses = await sql.listWarehouses();
+  const warehouses = await warehouseSelection.list();
   assert.ok(warehouses.length > 0, "at least one accessible warehouse");
   const result = await statements.submit({ statement: "SELECT 1 AS result" }, "agent");
   if (result.state !== "SUCCEEDED") {
