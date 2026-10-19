@@ -145,11 +145,11 @@ async function runDoctorCommand(settings: Settings): Promise<number> {
     settings,
     resolveAuth: () => resolveAuth(authRequest(settings), defaultAuthDependencies(process.env)),
     createClient: (auth) => createClient(auth, clientDependencies),
+    createStatements: (client, options) => createStatementLifecycle(client, { ...options, sleep: clientDependencies.sleep }),
     runCli: (args) => defaultAuthDependencies(process.env).runCli(args),
     openRepository: openLogRepository,
     fetch: clientDependencies.fetch,
     ensureExportDir: ensureWritableDirectory,
-    sleep: clientDependencies.sleep,
   });
   process.stdout.write(`${formatReport(checks)}\n`);
   return checks.some((check) => check.status === "fail") ? 1 : 0;

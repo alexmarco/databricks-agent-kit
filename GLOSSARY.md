@@ -29,4 +29,5 @@ Terms used in the code and the documents of `databricks-agent-kit`. Design vocab
 | **Result shaping**       | Turning an API statement into a bounded result: columns, rows capped by the row limit and the byte limit, and a `truncated` flag.                                 |
 | **Await export**         | `awaitExport` polls an export statement until it succeeds, with waits growing to 10 s and no upper bound, and describes its result (ADR 0010). Opposite of the bounded `get` wait. |
 | **Chunk link**           | The presigned URL of one result chunk of an export, from `exportChunkLink` or inline with the finished statement. It carries credentials: never logged or returned.   |
+| **Statement lookup**     | The module (`src/statement-lookup.ts`, ADR 0011) that answers `get` and `cancel` for any statement id: an id the export manager knows is an export, any other id is a plain statement.        |
 | **Diagnostics**          | `checkMs` and `warehouseId`, filled by the module for the final log entry of a tool call (an out-parameter until the execution scope module replaces it).         |
