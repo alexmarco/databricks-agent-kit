@@ -4,7 +4,7 @@ import type { FetchLike } from "../auth.ts";
 import type { DatabricksClient } from "../client.ts";
 import { InvalidArgumentError, messageWithoutUrls } from "../errors.ts";
 import type { ExecutionHandle, LogService } from "../logging/service.ts";
-import { SqlError, type ExecuteSqlRequest, type ExecutionDiagnostics, type SqlService } from "../sql.ts";
+import { SqlError, type ExecuteSqlRequest, type ExecutionDiagnostics, type StatementLifecycle } from "../statements.ts";
 import { createCsvSink } from "./csv-sink.ts";
 import { createParquetSink } from "./parquet-sink.ts";
 import { exportId, exportPath } from "./paths.ts";
@@ -14,7 +14,7 @@ import type { ChunkSink, ExportFormat, ExportState, ManifestColumn, SinkContext 
 /** Collaborators of the export manager; `sinks` replaces the sink factories (tests inject fakes). */
 export interface ExportManagerDependencies {
   client: DatabricksClient;
-  sql: Pick<SqlService, "submitExport">;
+  statements: Pick<StatementLifecycle, "submitExport">;
   fetch: FetchLike;
   /** Export directory; a relative path is resolved against the working directory at creation. */
   dir: string;
@@ -298,7 +298,7 @@ export function createExportManager(deps: ExportManagerDependencies): ExportMana
 
   async function start(request: { statement: ExecuteSqlRequest; format: ExportFormat; name?: string }, diagnostics?: ExecutionDiagnostics): Promise<ExportState> {
     await mkdir(dir, { recursive: true, mode: 0o700 });
-    const { statementId } = await deps.sql.submitExport(request.statement, request.format, diagnostics);
+    const { statementId } = await deps.statements.submitExport(request.statement, request.format, diagnostics);
     const id = exportId(request.name, statementId);
     const path = exportPath(dir, id, request.format);
     const running = [...jobs.values()].some((job) => job.state.path === path && !FINAL_STATUSES.has(job.state.status));
