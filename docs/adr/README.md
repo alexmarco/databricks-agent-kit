@@ -19,5 +19,6 @@ Possible statuses: Proposed, Accepted, Superseded.
 | [0011](0011-statement-lookup-for-get-statement.md) | Statement lookup for `get_statement` | Accepted |
 | [0012](0012-warehouse-selection-module.md) | Warehouse selection module | Accepted |
 | [0013](0013-execution-scope-module.md) | Execution scope module | Accepted |
+| [0014](0014-workspace-session-module.md) | Workspace session module | Accepted |
 
 Current design: [docs/design.md](../design.md).
