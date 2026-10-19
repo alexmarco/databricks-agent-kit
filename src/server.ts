@@ -6,6 +6,7 @@ import { describeArguments } from "./logging/arguments.ts";
 import type { LogRepository } from "./logging/repository.ts";
 import type { LogService } from "./logging/service.ts";
 import type { MetadataService } from "./metadata.ts";
+import { createStatementLookup } from "./statement-lookup.ts";
 import type { SqlService } from "./sql.ts";
 import type { ExecutionDiagnostics, StatementLifecycle } from "./statements.ts";
 
@@ -60,6 +61,7 @@ function summarize(result: unknown): Record<string, unknown> {
  */
 export function createMcpServer(deps: ServerDependencies): McpServer {
   const { sql, statements, metadata, exports, logs, repository } = deps;
+  const lookup = createStatementLookup({ statements, exports });
   const server = new McpServer({ name: "databricks-agent-kit", version: deps.version }, { instructions: INSTRUCTIONS });
 
   function tool<Schema extends z.ZodObject>(
@@ -169,19 +171,7 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     "get_statement",
     "Poll or cancel a statement or export of execute_sql.",
     z.object({ statement_id: z.string(), wait_seconds: z.number().int().min(0).max(30).optional(), cancel: z.boolean().optional() }),
-    async (args) => {
-      const statementId = args.statement_id;
-      const waitSeconds = args.wait_seconds ?? 0;
-      if (args.cancel === true) {
-        // The export manager cancels the Databricks statement of a running export itself.
-        if ((await exports.get(statementId)) === undefined) await statements.cancel(statementId);
-        else if (!(await exports.cancel(statementId))) return { statementId, cancelled: false, export: await exports.get(statementId) };
-        return { statementId, cancelled: true };
-      }
-      const exported = await exports.get(statementId);
-      if (exported !== undefined) return { statementId, export: waitSeconds > 0 ? await exports.wait(statementId, waitSeconds * 1000) : exported };
-      return statements.get(statementId, { waitSeconds: args.wait_seconds });
-    },
+    async (args) => (args.cancel === true ? lookup.cancel(args.statement_id) : lookup.get(args.statement_id, { waitSeconds: args.wait_seconds })),
   );
 
   resource("warehouses", "resource://databricks/warehouses", "SQL warehouses visible to this identity and the default one.", true, async () => ({
