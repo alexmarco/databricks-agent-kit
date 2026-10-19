@@ -1,4 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { LogLevel } from "../config.ts";
+import { DakError } from "../errors.ts";
 import type { ExecutionStatus, ExecutionTransport, LogRepository, QueueEvent } from "./repository.ts";
 import { uuidv7 } from "./uuid.ts";
 
@@ -6,16 +8,23 @@ const LEVEL_ORDER: Record<LogLevel, number> = { trace: 10, debug: 20, info: 30, 
 const SECRET_KEY = /token|secret|password|authorization|api[-_]?key/i;
 const DAY_MS = 86_400_000;
 
+/** Log service settings; the optional ones default to the production values. */
 export interface LogServiceOptions {
   repository: LogRepository;
   transport: ExecutionTransport;
+  /** Entries below this level are dropped; executions are always recorded. */
   level: LogLevel;
+  /** Queued events that trigger an immediate flush (default 100). */
   batchSize?: number;
+  /** Maximum time an event waits in the queue (default 5 s). */
   flushIntervalMs?: number;
+  /** Age after which executions and entries are purged (default 90 days). */
   retentionDays?: number;
+  /** Interval between purges after the one at startup (default 24 h). */
   purgeIntervalMs?: number;
 }
 
+/** What an execution is about: a tool, a resource or a prompt; none for the server lifecycle. */
 export interface ExecutionTarget {
   toolName?: string;
   promptName?: string;
@@ -24,6 +33,11 @@ export interface ExecutionTarget {
 
 type LogMethod = (message: string, metadata?: Record<string, unknown>, error?: unknown) => void;
 
+/**
+ * Logger bound to one execution; `complete`, `fail` and `cancel` end it, and only the first call counts. `fail` logs a
+ * `DakError` as `warn` without stack trace and any other error as `error` with its stack trace; its `metadata` goes into
+ * that single entry.
+ */
 export interface ExecutionHandle {
   readonly executionId: string;
   trace: LogMethod;
@@ -33,13 +47,18 @@ export interface ExecutionHandle {
   error: LogMethod;
   fatal: LogMethod;
   complete(): void;
-  fail(error: unknown): void;
+  fail(error: unknown, metadata?: Record<string, unknown>): void;
   cancel(): void;
 }
 
+/** Queued writer of executions and log entries. */
 export interface LogService {
   readonly lifecycle: ExecutionHandle;
   startExecution(target: ExecutionTarget): ExecutionHandle;
+  /** Execution of the running `run()` scope, or the lifecycle execution outside any. */
+  current(): ExecutionHandle;
+  /** Runs `work` with `execution` as the current one, also across its awaits. */
+  run<T>(execution: ExecutionHandle, work: () => Promise<T>): Promise<T>;
   flush(): void;
   close(): void;
 }
@@ -52,6 +71,10 @@ function redact(value: unknown): unknown {
   return value;
 }
 
+/**
+ * Starts the log service: purges old data, opens the lifecycle execution and batches every write in memory, so a
+ * crash only loses the events still queued. Metadata keys that look like secrets are redacted. Never writes to stdout.
+ */
 export function createLogService(options: LogServiceOptions): LogService {
   const { repository, transport } = options;
   const batchSize = options.batchSize ?? 100;
@@ -59,6 +82,7 @@ export function createLogService(options: LogServiceOptions): LogService {
   const retentionMs = (options.retentionDays ?? 90) * DAY_MS;
   const threshold = LEVEL_ORDER[options.level];
   const queue: QueueEvent[] = [];
+  const scope = new AsyncLocalStorage<ExecutionHandle>();
   let flushTimer: ReturnType<typeof setTimeout> | undefined;
   let immediateFlushPending = false;
   let closed = false;
@@ -136,18 +160,21 @@ export function createLogService(options: LogServiceOptions): LogService {
       enqueue({ type: "execution-end", executionId, finishedAt: Date.now(), status });
     };
 
+    const warn = log("warn");
     const error = log("error");
     return {
       executionId,
       trace: log("trace"),
       debug: log("debug"),
       info: log("info"),
-      warn: log("warn"),
+      warn,
       error,
       fatal: log("fatal"),
       complete: () => finish("completed"),
-      fail: (failure) => {
-        error(failure instanceof Error ? failure.message : String(failure), undefined, failure);
+      fail: (failure, metadata) => {
+        const message = failure instanceof Error ? failure.message : String(failure);
+        if (failure instanceof DakError) warn(message, metadata);
+        else error(message, metadata, failure);
         finish("failed");
       },
       cancel: () => finish("cancelled"),
@@ -163,6 +190,8 @@ export function createLogService(options: LogServiceOptions): LogService {
   return {
     lifecycle,
     startExecution,
+    current: () => scope.getStore() ?? lifecycle,
+    run: (execution, work) => scope.run(execution, work),
     flush,
     close: () => {
       if (closed) return;

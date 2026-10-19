@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openLogRepository, type LogRepository } from "../src/logging/repository.ts";
@@ -44,6 +44,13 @@ test("opens the database with the required PRAGMAs, schema and indexes", async (
       assert.ok(info.indexes.includes(index), index);
     }
     assert.deepEqual(info.tables.sort(), ["executions", "logs"]);
+  });
+});
+
+test("the database and its directory are owner-only", { skip: process.platform === "win32" && "POSIX permissions" }, async () => {
+  await withRepository(async (_repository, dir) => {
+    assert.equal((await stat(join(dir, "nested"))).mode & 0o777, 0o700);
+    assert.equal((await stat(join(dir, "nested", "logs.db"))).mode & 0o777, 0o600);
   });
 });
 

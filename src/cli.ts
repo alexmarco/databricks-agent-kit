@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { Command, Option } from "commander";
 import { defaultAuthDependencies, resolveAuth } from "./auth.ts";
 import { createClient, type ClientDependencies } from "./client.ts";
-import { resolveSettings, type Settings } from "./config.ts";
-import { formatReport, runDoctor } from "./doctor.ts";
+import { defaultStorageDir, resolveSettings, type CliFlags, type Settings } from "./config.ts";
+import { ensureWritableDirectory, formatReport, runDoctor } from "./doctor.ts";
+import { cleanupOrphanedParts, createExportManager, type ExportManager } from "./export/manager.ts";
 import { startHttpServer } from "./http.ts";
 import { openLogRepository } from "./logging/repository.ts";
+import { createRateLimitedLogger } from "./logging/rate-limit.ts";
 import { createLogService } from "./logging/service.ts";
 import { createMetadataService, type MetadataService } from "./metadata.ts";
 import { createMcpServer } from "./server.ts";
@@ -18,22 +21,18 @@ import { createSqlService, type SqlService } from "./sql.ts";
 const installDir = fileURLToPath(new URL("..", import.meta.url));
 const { version } = JSON.parse(readFileSync(join(installDir, "package.json"), "utf8")) as { version: string };
 
-const USAGE = `dak ${version} - Databricks MCP server for coding agents
-
-Usage:
-  dak mcp [--transport stdio|http] [--host <host>] [--port <port>] [--profile <name>] [--allow-writes]
-  dak doctor [--profile <name>]
-  dak --version
-
+const ENVIRONMENT_HELP = `
 Environment: DATABRICKS_HOST, DATABRICKS_TOKEN, DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET,
 DATABRICKS_CONFIG_PROFILE, DATABRICKS_CONFIG_FILE, DATABRICKS_WAREHOUSE_ID, DAK_ALLOW_WRITES, DAK_MAX_ROWS,
-DAK_HTTP_HOST, DAK_HTTP_PORT, DAK_HTTP_TOKEN, DAK_STORAGE_DIR, DAK_LOG_LEVEL.
+DAK_HTTP_HOST, DAK_HTTP_PORT, DAK_HTTP_TOKEN, DAK_STORAGE_DIR, DAK_EXPORT_DIR, DAK_EXPORT_MAX_BYTES, DAK_LOG_LEVEL.
 `;
 
 const clientDependencies: ClientDependencies = {
   fetch: (input, init) => fetch(input, init),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
+
+const UNAUTHORIZED_LOG_INTERVAL_MS = 60_000;
 
 /** Retries the loader on the next call when it fails, so fixing credentials does not require a restart. */
 function memoizeUntilSuccess<T>(load: () => Promise<T>): () => Promise<T> {
@@ -65,21 +64,37 @@ function authRequest(settings: Settings) {
 async function runMcp(settings: Settings): Promise<void> {
   const repository = await openLogRepository(join(settings.storageDir, "logs.db"));
   const logs = createLogService({ repository, transport: settings.transport, level: settings.logLevel });
+  // Orphan .part files need no credentials, so they are removed at startup without blocking it.
+  void cleanupOrphanedParts(settings.exportDir).catch((error: unknown) => logs.lifecycle.warn("Export cleanup failed", { dir: settings.exportDir }, error));
+  // Set once the services exist, so shutdown never triggers credential resolution just to close the exports.
+  let createdExports: ExportManager | undefined;
   const services = memoizeUntilSuccess(async () => {
-    const auth = await resolveAuth(authRequest(settings), defaultAuthDependencies(process.env));
-    const client = createClient(auth, clientDependencies);
+    const auth = await resolveAuth(authRequest(settings), {
+      ...defaultAuthDependencies(process.env),
+      onRefresh: (method) => logs.current().debug("Token refreshed", { method }),
+    });
+    const client = createClient(auth, {
+      ...clientDependencies,
+      onRetry: (event) => logs.current().warn("Databricks request retried", { ...event }),
+      onRequest: (event) => logs.current().debug("Databricks request", { ...event }),
+    });
     const sql = createSqlService(client, {
       maxRows: settings.maxRows,
       allowWrites: settings.allowWrites,
       defaultWarehouseId: settings.warehouseId ?? auth.profileWarehouseId,
       maxResultBytes: 100_000,
+      maxExportBytes: settings.exportMaxBytes,
+      onWarehouseChosen: (event) => logs.current().info("Warehouse chosen automatically", { ...event }),
     });
     logs.lifecycle.info("Databricks credentials resolved", { host: auth.host, method: auth.method });
-    return { sql, metadata: createMetadataService(client, sql) };
+    const exports = createExportManager({ client, sql, fetch: clientDependencies.fetch, dir: settings.exportDir, logs, sleep: clientDependencies.sleep });
+    createdExports = exports;
+    return { sql, metadata: createMetadataService(client, sql), exports };
   });
   const sql = lazy<SqlService>(async () => (await services()).sql);
   const metadata = lazy<MetadataService>(async () => (await services()).metadata);
-  const factory = () => createMcpServer({ sql, metadata, logs, repository, version, allowWrites: settings.allowWrites });
+  const exports = lazy<ExportManager>(async () => (await services()).exports);
+  const factory = () => createMcpServer({ sql, metadata, exports, logs, repository, version, allowWrites: settings.allowWrites });
 
   let stopTransport: () => Promise<void>;
   try {
@@ -87,7 +102,12 @@ async function runMcp(settings: Settings): Promise<void> {
       const handle = serveStdio(factory);
       stopTransport = () => handle.close();
     } else {
-      const http = await startHttpServer({ host: settings.httpHost, port: settings.httpPort, token: settings.httpToken, createServer: factory });
+      const logRejection = createRateLimitedLogger(
+        (suppressed) => logs.lifecycle.warn("HTTP request rejected with 401", { suppressed }),
+        UNAUTHORIZED_LOG_INTERVAL_MS,
+        Date.now,
+      );
+      const http = await startHttpServer({ host: settings.httpHost, port: settings.httpPort, token: settings.httpToken, createServer: factory, onUnauthorized: logRejection });
       process.stderr.write(`dak: MCP server listening on ${http.url}\n`);
       stopTransport = () => http.close();
     }
@@ -104,6 +124,7 @@ async function runMcp(settings: Settings): Promise<void> {
     stopping = true;
     logs.lifecycle.info("Shutting down", { reason });
     await stopTransport().catch(() => undefined);
+    await createdExports?.close().catch(() => undefined);
     logs.close();
     process.exit(0);
   };
@@ -113,52 +134,52 @@ async function runMcp(settings: Settings): Promise<void> {
   process.once("beforeExit", () => logs.close());
 }
 
-async function main(argv: string[]): Promise<number | undefined> {
-  const { values, positionals } = parseArgs({
-    args: argv,
-    allowPositionals: true,
-    options: {
-      profile: { type: "string" },
-      "allow-writes": { type: "boolean" },
-      transport: { type: "string" },
-      host: { type: "string" },
-      port: { type: "string" },
-      version: { type: "boolean", short: "v" },
-      help: { type: "boolean", short: "h" },
-    },
+/** Runs every `dak doctor` check against the configured workspace and returns the process exit code. */
+async function runDoctorCommand(settings: Settings): Promise<number> {
+  const checks = await runDoctor({
+    settings,
+    resolveAuth: () => resolveAuth(authRequest(settings), defaultAuthDependencies(process.env)),
+    createClient: (auth) => createClient(auth, clientDependencies),
+    runCli: (args) => defaultAuthDependencies(process.env).runCli(args),
+    openRepository: openLogRepository,
+    fetch: clientDependencies.fetch,
+    ensureExportDir: ensureWritableDirectory,
+    sleep: clientDependencies.sleep,
   });
-  if (values.version === true) {
-    process.stdout.write(`${version}\n`);
-    return 0;
-  }
-  const [command] = positionals;
-  if (values.help === true || command === "help") {
-    process.stdout.write(USAGE);
-    return 0;
-  }
-  if (command === undefined) {
-    process.stderr.write(USAGE);
-    return 1;
-  }
+  process.stdout.write(`${formatReport(checks)}\n`);
+  return checks.some((check) => check.status === "fail") ? 1 : 0;
+}
 
-  const settings = resolveSettings(values, process.env, installDir);
-  if (command === "mcp") {
-    await runMcp(settings);
-    return undefined;
-  }
-  if (command === "doctor") {
-    const checks = await runDoctor({
-      settings,
-      resolveAuth: () => resolveAuth(authRequest(settings), defaultAuthDependencies(process.env)),
-      createClient: (auth) => createClient(auth, clientDependencies),
-      runCli: (args) => defaultAuthDependencies(process.env).runCli(args),
-      openRepository: openLogRepository,
+/** Parses the command line, runs the selected command and returns its exit code (undefined while `mcp` keeps serving). */
+async function main(argv: string[]): Promise<number | undefined> {
+  let exitCode: number | undefined;
+  const settingsFrom = (flags: CliFlags) => resolveSettings(flags, process.env, defaultStorageDir(process.env, process.platform, homedir()));
+  const profileOption = () => new Option("--profile <name>", "profile in ~/.databrickscfg; environment credentials are then ignored");
+
+  const program = new Command("dak")
+    .description("Databricks MCP server for coding agents")
+    .version(version, "-v, --version")
+    .addHelpText("after", ENVIRONMENT_HELP)
+    .showHelpAfterError();
+  program
+    .command("mcp")
+    .description("serve the MCP tools to an agent")
+    .addOption(new Option("--transport <transport>", "MCP transport (default: stdio)").choices(["stdio", "http"]))
+    .option("--host <host>", "HTTP bind address (default: 127.0.0.1)")
+    .option("--port <port>", "HTTP port (default: 8765)")
+    .addOption(profileOption())
+    .option("--allow-writes", "allow statements that modify data")
+    .action(async (flags: CliFlags) => runMcp(settingsFrom(flags)));
+  program
+    .command("doctor")
+    .description("check authentication, permissions and workspace features")
+    .addOption(profileOption())
+    .action(async (flags: CliFlags) => {
+      exitCode = await runDoctorCommand(settingsFrom(flags));
     });
-    process.stdout.write(`${formatReport(checks)}\n`);
-    return checks.some((check) => check.status === "fail") ? 1 : 0;
-  }
-  process.stderr.write(`Unknown command '${command}'.\n\n${USAGE}`);
-  return 1;
+
+  await program.parseAsync(argv, { from: "user" });
+  return exitCode;
 }
 
 main(process.argv.slice(2)).then(

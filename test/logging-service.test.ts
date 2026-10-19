@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { ReadOnlyViolationError } from "../src/sql.ts";
 import { createLogService } from "../src/logging/service.ts";
 import type { LogRepository, QueueEvent } from "../src/logging/repository.ts";
 
@@ -64,7 +65,7 @@ test("flushes when 100 events are pending without waiting for the timer", async 
   const service = createLogService({ repository: memory.repository, transport: "stdio", level: "info" });
   t.mock.timers.tick(5_000);
   memory.batches.length = 0;
-  const execution = service.startExecution({ toolName: "list_catalogs" });
+  const execution = service.startExecution({ toolName: "list_objects" });
   for (let index = 0; index < 99; index++) execution.info(`event ${index}`);
   assert.equal(memory.batches.length, 0);
   await nextTick();
@@ -169,4 +170,60 @@ test("the service never writes to stdout", (t) => {
     process.stdout.write = original;
   }
   assert.equal(writes.length, 0);
+});
+
+test("fail logs a DakError as warn without stack trace and any other error as error with stack trace", () => {
+  const memory = memoryRepository();
+  const service = createLogService({ repository: memory.repository, transport: "stdio", level: "info" });
+  const rejected = service.startExecution({ toolName: "execute_sql" });
+  rejected.fail(new ReadOnlyViolationError("x"));
+  const crashed = service.startExecution({ toolName: "execute_sql" });
+  crashed.fail(new Error("boom"));
+  service.flush();
+  const logs = memory.events().flatMap((event) => (event.type === "log" ? [event.entry] : []));
+  const warning = logs.find((entry) => entry.executionId === rejected.executionId);
+  assert.equal(warning?.level, "warn");
+  assert.equal(warning?.message, "x");
+  assert.equal(warning?.stackTrace, undefined);
+  const failure = logs.find((entry) => entry.executionId === crashed.executionId);
+  assert.equal(failure?.level, "error");
+  assert.match(failure?.stackTrace ?? "", /Error: boom/);
+  const ends = memory.events().flatMap((event) => (event.type === "execution-end" ? [event] : []));
+  assert.equal(ends.find((event) => event.executionId === rejected.executionId)?.status, "failed");
+  assert.equal(ends.find((event) => event.executionId === crashed.executionId)?.status, "failed");
+  service.close();
+});
+
+test("run scopes current() to the given execution across awaits and falls back to the lifecycle", async () => {
+  const memory = memoryRepository();
+  const service = createLogService({ repository: memory.repository, transport: "stdio", level: "info" });
+  const handle = service.startExecution({ toolName: "execute_sql" });
+  const inside = await service.run(handle, async () => {
+    await Promise.resolve();
+    return service.current();
+  });
+  assert.equal(inside, handle);
+  assert.equal(service.current(), service.lifecycle);
+  service.close();
+});
+
+test("fail writes its metadata, redacted, into the single warn or error entry", () => {
+  const memory = memoryRepository();
+  const service = createLogService({ repository: memory.repository, transport: "stdio", level: "info" });
+  const rejected = service.startExecution({ toolName: "execute_sql" });
+  rejected.fail(new ReadOnlyViolationError("x"), { statement: "DELETE FROM t", apiToken: "abc" });
+  const crashed = service.startExecution({ toolName: "execute_sql" });
+  crashed.fail(new Error("boom"), { durationMs: 3 });
+  service.flush();
+  const logs = memory.events().flatMap((event) => (event.type === "log" ? [event.entry] : []));
+  const warnings = logs.filter((entry) => entry.executionId === rejected.executionId);
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0]?.level, "warn");
+  assert.deepEqual(warnings[0]?.metadata, { statement: "DELETE FROM t", apiToken: "[REDACTED]" });
+  const failures = logs.filter((entry) => entry.executionId === crashed.executionId);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0]?.level, "error");
+  assert.deepEqual(failures[0]?.metadata, { durationMs: 3 });
+  assert.match(failures[0]?.stackTrace ?? "", /Error: boom/);
+  service.close();
 });
