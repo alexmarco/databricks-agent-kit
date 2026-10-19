@@ -16,5 +16,6 @@ Possible statuses: Proposed, Accepted, Superseded.
 | [0008](0008-simplified-read-only-check.md) | Simplified read-only check                    | Accepted |
 | [0009](0009-statement-lifecycle-module.md) | Statement lifecycle module                    | Accepted |
 | [0010](0010-exports-on-the-statement-lifecycle.md) | Exports on the statement lifecycle module | Accepted |
+| [0011](0011-statement-lookup-for-get-statement.md) | Statement lookup for `get_statement` | Accepted |
 
 Current design: [docs/design.md](../design.md).
