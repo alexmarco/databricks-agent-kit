@@ -16,7 +16,7 @@ import { createRateLimitedLogger } from "./logging/rate-limit.ts";
 import { createLogService } from "./logging/service.ts";
 import { createMetadataService, type MetadataService } from "./metadata.ts";
 import { createMcpServer } from "./server.ts";
-import { createSqlService, type SqlService } from "./sql.ts";
+import { createWarehouseSelection, type WarehouseSelection } from "./warehouses.ts";
 import { createStatementLifecycle, type StatementLifecycle } from "./statements.ts";
 
 const installDir = fileURLToPath(new URL("..", import.meta.url));
@@ -79,7 +79,7 @@ async function runMcp(settings: Settings): Promise<void> {
       onRetry: (event) => logs.current().warn("Databricks request retried", { ...event }),
       onRequest: (event) => logs.current().debug("Databricks request", { ...event }),
     });
-    const sql = createSqlService(client, {
+    const warehouses = createWarehouseSelection(client, {
       defaultWarehouseId: settings.warehouseId ?? auth.profileWarehouseId,
       onWarehouseChosen: (event) => logs.current().info("Warehouse chosen automatically", { ...event }),
     });
@@ -89,17 +89,17 @@ async function runMcp(settings: Settings): Promise<void> {
       allowWrites: settings.allowWrites,
       maxResultBytes: 100_000,
       maxExportBytes: settings.exportMaxBytes,
-      resolveWarehouse: sql.resolveWarehouse,
+      resolveWarehouse: warehouses.resolve,
     });
     const exports = createExportManager({ statements, fetch: clientDependencies.fetch, dir: settings.exportDir, logs, sleep: clientDependencies.sleep });
     createdExports = exports;
-    return { sql, statements, metadata: createMetadataService(client, statements), exports };
+    return { warehouses, statements, metadata: createMetadataService(client, statements), exports };
   });
-  const sql = lazy<SqlService>(async () => (await services()).sql);
+  const warehouses = lazy<WarehouseSelection>(async () => (await services()).warehouses);
   const statements = lazy<StatementLifecycle>(async () => (await services()).statements);
   const metadata = lazy<MetadataService>(async () => (await services()).metadata);
   const exports = lazy<ExportManager>(async () => (await services()).exports);
-  const factory = () => createMcpServer({ sql, statements, metadata, exports, logs, repository, version, allowWrites: settings.allowWrites });
+  const factory = () => createMcpServer({ warehouses, statements, metadata, exports, logs, repository, version, allowWrites: settings.allowWrites });
 
   let stopTransport: () => Promise<void>;
   try {

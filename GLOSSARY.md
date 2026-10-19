@@ -30,4 +30,6 @@ Terms used in the code and the documents of `databricks-agent-kit`. Design vocab
 | **Await export**         | `awaitExport` polls an export statement until it succeeds, with waits growing to 10 s and no upper bound, and describes its result (ADR 0010). Opposite of the bounded `get` wait. |
 | **Chunk link**           | The presigned URL of one result chunk of an export, from `exportChunkLink` or inline with the finished statement. It carries credentials: never logged or returned.   |
 | **Statement lookup**     | The module (`src/statement-lookup.ts`, ADR 0011) that answers `get` and `cancel` for any statement id: an id the export manager knows is an export, any other id is a plain statement.        |
+| **Warehouse selection**  | The module (`src/warehouses.ts`, ADR 0012) that owns which SQL warehouse is used: `resolve(explicit?)` and `list()`. Rule order: explicit, configured, automatic.   |
+| **Automatic choice**     | The warehouse picked when none is explicit or configured: a running one, else a serverless one, else the first accessible. Remembered once made and reported once with its reason (`running`, `serverless`, `first`). |
 | **Diagnostics**          | `checkMs` and `warehouseId`, filled by the module for the final log entry of a tool call (an out-parameter until the execution scope module replaces it).         |
