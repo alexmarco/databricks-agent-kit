@@ -15,7 +15,8 @@ export interface WorkspaceAdapters {
   createClient(auth: AuthProvider, observers: Pick<ClientDependencies, "onRetry" | "onRequest">): DatabricksClient;
   /** Plain `fetch` for presigned chunk downloads. */
   fetch: FetchLike;
-  sleep(ms: number): Promise<void>;
+  /** Waits `ms`; with a `signal` it rejects when the signal aborts and releases its timer. */
+  sleep(ms: number, signal?: AbortSignal): Promise<void>;
 }
 
 /** Limits of the statement lifecycle, which the doctor keeps smaller than the server. */

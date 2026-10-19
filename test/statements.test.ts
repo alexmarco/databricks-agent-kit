@@ -615,6 +615,31 @@ test("awaitExport stops polling at once when the signal aborts during a wait", a
   assert.equal(calls.length, 1);
 });
 
+test("awaitExport releases the wait it was sleeping in when the signal aborts, so no timer outlives the budget", async () => {
+  const { client } = fakeClient(() => ({ statement_id: "ex1", status: { state: "RUNNING" } }));
+  let timersRunning = 0;
+  let sleeping = false;
+  const lifecycle = createStatementLifecycle(client, {
+    ...options,
+    sleep: (_ms, signal) =>
+      new Promise<void>((_resolve, reject) => {
+        sleeping = true;
+        timersRunning++;
+        signal?.addEventListener("abort", () => {
+          timersRunning--;
+          reject(signal.reason);
+        });
+      }),
+  });
+  const controller = new AbortController();
+  const pending = lifecycle.awaitExport("ex1", controller.signal);
+  while (!sleeping) await new Promise((resolve) => setTimeout(resolve, 1));
+  assert.equal(timersRunning, 1);
+  controller.abort(new Error("stop"));
+  await assert.rejects(pending, /stop/);
+  assert.equal(timersRunning, 0);
+});
+
 test("exportChunkLink requests the link of a chunk by the encoded statement id", async () => {
   const { client, calls } = fakeClient(() => ({ external_links: [{ chunk_index: 2, row_count: 7, external_link: "https://storage.example/chunk-2", expiration: "2030-01-01T00:00:00.000Z" }] }));
   const link = await createStatementLifecycle(client, options).exportChunkLink("ex 1", 2, new AbortController().signal);

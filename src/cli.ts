@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { Command, Option } from "commander";
+import { sleep } from "./abort.ts";
 import { defaultAuthDependencies, resolveAuth } from "./auth.ts";
 import { createClient, type ClientDependencies } from "./client.ts";
 import { defaultStorageDir, resolveSettings, type CliFlags, type Settings } from "./config.ts";
@@ -28,7 +29,7 @@ DAK_HTTP_HOST, DAK_HTTP_PORT, DAK_HTTP_TOKEN, DAK_STORAGE_DIR, DAK_EXPORT_DIR, D
 
 const clientDependencies: ClientDependencies = {
   fetch: (input, init) => fetch(input, init),
-  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  sleep,
 };
 
 const UNAUTHORIZED_LOG_INTERVAL_MS = 60_000;
@@ -43,7 +44,7 @@ function workspaceAdapters(settings: Settings): WorkspaceAdapters {
     resolveAuth: (onRefresh) => resolveAuth(authRequest(settings), { ...defaultAuthDependencies(process.env), ...(onRefresh && { onRefresh }) }),
     createClient: (auth, observers) => createClient(auth, { ...clientDependencies, ...observers }),
     fetch: clientDependencies.fetch,
-    sleep: clientDependencies.sleep,
+    sleep,
   };
 }
 

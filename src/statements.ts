@@ -1,7 +1,7 @@
 import type { DatabricksClient } from "./client.ts";
 import { DakError } from "./errors.ts";
 import type { ExecutionScope } from "./execution-scope.ts";
-import { untilAborted } from "./abort.ts";
+import { sleep as defaultSleep, untilAborted } from "./abort.ts";
 import type { ExportFormat, ManifestColumn } from "./export/types.ts";
 
 /** Statement that Databricks failed to plan or run; the message keeps the error class and SQLSTATE. */
@@ -98,8 +98,11 @@ export interface StatementLifecycleOptions {
   resolveWarehouse(explicit?: string): Promise<string>;
   /** Receives the diagnostics of the call that runs the statement (read-only check duration, export warehouse); optional. */
   scope?: Pick<ExecutionScope, "annotate">;
-  /** Waits between polls of {@link StatementLifecycle.get}; replaceable in tests. */
-  sleep?(ms: number): Promise<void>;
+  /**
+   * Waits between polls; replaceable in tests. With a `signal` it rejects as soon as the signal aborts and releases its
+   * timer, so an aborted wait does not keep the process alive.
+   */
+  sleep?(ms: number, signal?: AbortSignal): Promise<void>;
   /** Clock in milliseconds; replaceable in tests. */
   now?(): number;
 }
@@ -222,7 +225,7 @@ function capRowsByBytes(rows: Array<Array<string | null>>, maxBytes: number): Ar
  */
 export function createStatementLifecycle(client: DatabricksClient, options: StatementLifecycleOptions) {
   const now = options.now ?? Date.now;
-  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const sleep = options.sleep ?? defaultSleep;
 
   async function shape(statement: ApiStatement, rowLimit: number, warehouseId: string | undefined): Promise<StatementResult> {
     const { state } = statement.status;
@@ -401,7 +404,7 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
       if (state !== "PENDING" && state !== "RUNNING") {
         throw new SqlError(statement.status.error?.message ?? `Export statement ended in state ${state}.`);
       }
-      await untilAborted(sleep(Math.min(attempt * 1000, MAX_EXPORT_POLL_WAIT_MS)), signal);
+      await untilAborted(sleep(Math.min(attempt * 1000, MAX_EXPORT_POLL_WAIT_MS), signal), signal);
     }
   }
 
