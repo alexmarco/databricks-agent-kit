@@ -1,0 +1,32 @@
+# git-cliff configuration used by .github/workflows/release.yml.
+# It derives the next version and the release notes from Conventional Commits.
+# Only feat, fix and perf commits (and breaking changes on them) are releasable.
+# Other types are skipped, so a push without them creates no release.
+
+[changelog]
+header = ""
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{% if commit.breaking %}**BREAKING:** {% endif %}{{ commit.message | upper_first }}
+{% endfor %}
+{% endfor %}
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+tag_pattern = "v[0-9].*"
+commit_parsers = [
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Bug Fixes" },
+  { message = "^perf", group = "Performance" },
+  { message = ".*", skip = true },
+]
+
+[bump]
+# Used only while no tag exists: the first release is v0.1.0.
+initial_tag = "v0.1.0"
