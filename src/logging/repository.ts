@@ -1,11 +1,14 @@
-import { mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { LogLevel } from "../config.ts";
 
+/** Lifecycle of an execution: `started` until it completes, fails or is cancelled. */
 export type ExecutionStatus = "started" | "completed" | "failed" | "cancelled";
+/** MCP transport that served the execution. */
 export type ExecutionTransport = "stdio" | "http" | "sse";
 
+/** One tool call, resource read or server lifecycle, identified by a UUID v7. */
 export interface Execution {
   executionId: string;
   startedAt: number;
@@ -17,6 +20,7 @@ export interface Execution {
   status: ExecutionStatus;
 }
 
+/** One log line of an execution; `metadata` is already redacted. */
 export interface LogEntry {
   id?: number;
   executionId: string;
@@ -29,11 +33,13 @@ export interface LogEntry {
   stackTrace?: string;
 }
 
+/** Write queued by the log service and persisted in batches by {@link LogRepository.writeBatch}. */
 export type QueueEvent =
   | { type: "execution-start"; execution: Execution }
   | { type: "execution-end"; executionId: string; finishedAt: number; status: ExecutionStatus }
   | { type: "log"; entry: LogEntry };
 
+/** Filters of the log search; all are optional and combined with AND. */
 export interface SearchLogsRequest {
   level?: string | undefined;
   text?: string | undefined;
@@ -43,17 +49,20 @@ export interface SearchLogsRequest {
   limit?: number | undefined;
 }
 
+/** Matching entries, newest first, and how many match in total regardless of the limit. */
 export interface SearchLogsResponse {
   results: LogEntry[];
   total: number;
 }
 
+/** Execution, error (error and fatal) and warning counts since a point in time. */
 export interface LogStats {
   executions: number;
   errors: number;
   warnings: number;
 }
 
+/** SQLite settings, tables and indexes, exposed for tests and diagnostics. */
 export interface RepositoryInfo {
   journalMode: string;
   synchronous: number;
@@ -64,13 +73,16 @@ export interface RepositoryInfo {
   indexes: string[];
 }
 
+/** SQLite store of executions and log entries, shared by every `dak` process of the user. */
 export interface LogRepository {
+  /** Persists the events in one transaction, in order. */
   writeBatch(events: QueueEvent[]): void;
   recentErrors(limit: number): LogEntry[];
   recentExecutions(limit: number): Execution[];
   executionDetail(executionId: string): { execution: Execution; logs: LogEntry[] } | undefined;
   stats(since: number): LogStats;
   searchLogs(request: SearchLogsRequest): SearchLogsResponse;
+  /** Deletes executions started and entries logged before `cutoff` (Unix milliseconds). */
   purge(cutoff: number): void;
   inspect(): RepositoryInfo;
   close(): void;
@@ -156,10 +168,13 @@ function parseTime(value: string, name: string): number {
   return parsed;
 }
 
+/** Opens (creating it if needed) the log database at `path`, in WAL mode and readable only by its owner outside Windows. */
 export async function openLogRepository(path: string): Promise<LogRepository> {
-  mkdirSync(dirname(path), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const Database = await loadDatabaseSync();
   const db = new Database(path);
+  // Owner-only access; SQLite creates the -wal and -shm files with the database file's permissions.
+  if (process.platform !== "win32") chmodSync(path, 0o600);
   db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY;");
   db.exec(SCHEMA);
 

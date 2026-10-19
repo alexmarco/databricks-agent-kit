@@ -1,5 +1,7 @@
 # databricks-agent-kit - Implementation Plan
 
+> Superseded for tools and logging by [the export and tools plan](../superpowers/plan/2026-10-19-export-and-tools.md).
+
 Design: [design.md](design.md). Method: TDD (red -> green -> refactor) with `node:test`; every phase starts by writing the failing tests listed for it. Branch `feature/mcp-server`, one Conventional Commit per phase.
 
 ## Phase 0 - Bootstrap

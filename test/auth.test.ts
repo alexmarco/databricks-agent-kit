@@ -38,6 +38,12 @@ test("environment PAT wins when no explicit profile", async () => {
   assert.equal(await auth.getToken(), "dapi1");
 });
 
+test("plain http hosts are rejected except on loopback", async () => {
+  await assert.rejects(resolveAuth({ ...base, env: { DATABRICKS_HOST: "http://a.cloud.databricks.com", DATABRICKS_TOKEN: "t" } }, deps()), /must use https/);
+  const local = await resolveAuth({ ...base, env: { DATABRICKS_HOST: "http://127.0.0.1:8080", DATABRICKS_TOKEN: "t" } }, deps());
+  assert.equal(local.host, "http://127.0.0.1:8080");
+});
+
 test("environment M2M requests a client_credentials token and caches it", async () => {
   const d = deps();
   const auth = await resolveAuth({ ...base, env: { DATABRICKS_HOST: "https://a", DATABRICKS_CLIENT_ID: "id", DATABRICKS_CLIENT_SECRET: "sec" } }, d);
@@ -128,4 +134,34 @@ test("M2M token endpoint failure is an AuthError without the secret", async () =
     assert.match(error.message, /401/);
     return true;
   });
+});
+
+test("onRefresh is called once per fetched M2M token and not on cache hits", async () => {
+  const refreshed: string[] = [];
+  const auth = await resolveAuth(
+    { ...base, env: { DATABRICKS_HOST: "https://a", DATABRICKS_CLIENT_ID: "id", DATABRICKS_CLIENT_SECRET: "sec" } },
+    deps({ onRefresh: (method) => refreshed.push(method) }),
+  );
+  await auth.getToken();
+  await auth.getToken();
+  assert.deepEqual(refreshed, ["oauth-m2m"]);
+});
+
+test("onRefresh is called once per fetched U2M token and not on cache hits", async () => {
+  const refreshed: string[] = [];
+  const auth = await resolveAuth(
+    { ...base, env: {} },
+    deps({ config: "[DEFAULT]\nhost = https://dev.example\nauth_type = databricks-cli\n", onRefresh: (method) => refreshed.push(method) }),
+  );
+  await auth.getToken();
+  await auth.getToken();
+  assert.deepEqual(refreshed, ["oauth-u2m"]);
+});
+
+test("a throwing onRefresh hook never breaks token retrieval", async () => {
+  const auth = await resolveAuth(
+    { ...base, env: { DATABRICKS_HOST: "https://a", DATABRICKS_CLIENT_ID: "id", DATABRICKS_CLIENT_SECRET: "sec" } },
+    deps({ onRefresh: () => { throw new Error("hook failed"); } }),
+  );
+  assert.equal(await auth.getToken(), "m2m-token");
 });

@@ -1,6 +1,8 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ExportManager } from "../src/export/manager.ts";
+import type { ExportFormat, ExportState } from "../src/export/types.ts";
 import type { MetadataService } from "../src/metadata.ts";
 import type { ExecuteSqlRequest, SqlService, StatementResult } from "../src/sql.ts";
 import { SqlError } from "../src/sql.ts";
@@ -20,27 +22,69 @@ export const okResult: StatementResult = {
 
 export function fakeServices() {
   const sqlRequests: ExecuteSqlRequest[] = [];
+  const getStatementCalls: Array<{ statementId: string; options: unknown }> = [];
+  const cancelledStatements: string[] = [];
   const sql = {
     executeSql: async (request: ExecuteSqlRequest) => {
       sqlRequests.push(request);
       if (request.statement.startsWith("FAIL")) throw new SqlError("[TABLE_OR_VIEW_NOT_FOUND] missing (SQLSTATE 42P01)");
       return okResult;
     },
-    getStatement: async (statementId: string) => ({ ...okResult, statementId }),
-    cancelStatement: async () => undefined,
+    runQuery: async () => okResult,
+    getStatement: async (statementId: string, options?: unknown) => {
+      getStatementCalls.push({ statementId, options });
+      return { ...okResult, statementId };
+    },
+    cancelStatement: async (statementId: string) => {
+      cancelledStatements.push(statementId);
+    },
     resolveWarehouse: async () => "wh1",
     listWarehouses: async () => [{ id: "wh1", name: "Serverless", state: "RUNNING", size: "2X-Small", serverless: true, isDefault: true }],
   } as unknown as SqlService;
   const metadata = {
-    listCatalogs: async () => [{ name: "main", comment: undefined }],
-    listSchemas: async (catalog: string) => [{ name: `${catalog}-schema`, comment: undefined }],
-    listTables: async () => [{ name: "orders", type: "MANAGED", comment: "Orders" }],
-    describeTable: async (fullName: string) => ({ fullName, columns: [{ name: "id", type: "bigint", nullable: false, comment: undefined }] }),
+    listObjects: async (request: { catalog?: string; schema?: string }) => {
+      if (request.catalog === undefined) return { level: "catalogs", items: [{ name: "main", comment: undefined }], truncated: false };
+      if (request.schema === undefined) return { level: "schemas", items: [{ name: `${request.catalog}-schema`, comment: undefined }], truncated: false };
+      return { level: "tables", items: [{ name: "orders", type: "MANAGED", comment: "Orders" }], truncated: false };
+    },
+    describeTable: async (fullName: string, options: { sampleRows?: number; lineage?: boolean } = {}) => ({
+      fullName,
+      columns: [{ name: "id", type: "bigint", nullable: false, comment: undefined }],
+      ...(options.sampleRows === undefined ? {} : { sample: okResult }),
+      ...(options.lineage === true ? { lineage: { upstream: [], downstream: [] } } : {}),
+    }),
     searchMetadata: async () => [{ kind: "table", catalog: "main", schema: "sales", table: "orders", column: null, comment: null }],
-    sampleTable: async () => okResult,
-    tableLineage: async (fullName: string) => ({ table: fullName, upstream: [], downstream: [] }),
   } as unknown as MetadataService;
-  return { sql, metadata, sqlRequests };
+  const exportCalls = {
+    start: [] as Array<{ statement: ExecuteSqlRequest; format: ExportFormat; name?: string | undefined }>,
+    wait: [] as Array<{ statementId: string; timeoutMs: number }>,
+    cancel: [] as string[],
+  };
+  const exportStates = new Map<string, ExportState>();
+  const exports: ExportManager = {
+    start: async (request, diagnostics) => {
+      exportCalls.start.push(request);
+      if (diagnostics !== undefined) Object.assign(diagnostics, { checkMs: 3, warehouseId: "wh-export" });
+      const state: ExportState = { id: "export-1", statementId: "st-export", format: request.format, path: `/exports/export-1.${request.format}`, status: "PENDING" };
+      exportStates.set(state.statementId, state);
+      return structuredClone(state);
+    },
+    get: async (statementId) => structuredClone(exportStates.get(statementId)),
+    wait: async (statementId, timeoutMs) => {
+      exportCalls.wait.push({ statementId, timeoutMs });
+      return structuredClone(exportStates.get(statementId));
+    },
+    cancel: async (statementId) => {
+      exportCalls.cancel.push(statementId);
+      const state = exportStates.get(statementId);
+      if (state === undefined || ["SUCCEEDED", "FAILED", "CANCELED"].includes(state.status)) return false;
+      state.status = "CANCELED";
+      return true;
+    },
+    cleanup: async () => undefined,
+    close: async () => undefined,
+  };
+  return { sql, metadata, exports, exportStates, sqlRequests, getStatementCalls, cancelledStatements, exportCalls };
 }
 
 export async function withLogs<T>(transport: ExecutionTransport, run: (context: { repository: LogRepository; logs: LogService; dir: string }) => Promise<T>): Promise<T> {

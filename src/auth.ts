@@ -6,25 +6,38 @@ import { promisify } from "node:util";
 import { parseDatabricksConfig, type Environment } from "./config.ts";
 import { AuthError } from "./errors.ts";
 
+/** Supported authentication methods: personal access token, OAuth machine-to-machine and OAuth user-to-machine. */
 export type AuthMethod = "pat" | "oauth-m2m" | "oauth-u2m";
+/** The subset of `fetch` used by `dak`, so tests can replace the network. */
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
+/** Resolved credentials for one workspace. */
 export interface AuthProvider {
+  /** Workspace URL without a trailing slash, for example `https://dbc-123.cloud.databricks.com`. */
   readonly host: string;
   readonly method: AuthMethod;
+  /** `warehouse_id` of the selected profile, if any. */
   readonly profileWarehouseId: string | undefined;
+  /** Returns a valid bearer token, refreshing it shortly before it expires. */
   getToken(): Promise<string>;
 }
 
+/** Side effects of credential resolution, injected so tests run without files, network or the Databricks CLI. */
 export interface AuthDependencies {
+  /** Contents of the Databricks config file, or undefined when it does not exist. */
   readConfig(): Promise<string | undefined>;
   fetch: FetchLike;
+  /** Runs the Databricks CLI with the given arguments and returns its stdout. */
   runCli(args: string[]): Promise<string>;
   now(): number;
+  /** Called each time an OAuth token is fetched (not on cache hits), for observability. */
+  onRefresh?(method: AuthMethod): void;
 }
 
+/** What to resolve: the profile name, whether it was passed explicitly, and the environment to read. */
 export interface AuthRequest {
   profile: string;
+  /** True when the profile came from `--profile`; environment credentials are then ignored. */
   explicitProfile: boolean;
   env: Environment;
 }
@@ -36,16 +49,32 @@ const LOGIN_HINT =
 const SUPPORTED_AUTH =
   "Supported: personal access token (token), OAuth M2M (client_id + client_secret), OAuth U2M (auth_type = databricks-cli).";
 
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+/**
+ * Adds `https://` when the scheme is missing and removes trailing slashes.
+ * @throws {AuthError} When the host uses plain `http` and is not a loopback address.
+ */
 export function normalizeHost(host: string): string {
   const withScheme = /^https?:\/\//i.test(host) ? host : `https://${host}`;
-  return withScheme.replace(/\/+$/, "");
+  const normalized = withScheme.replace(/\/+$/, "");
+  const url = new URL(normalized);
+  if (url.protocol !== "https:" && !LOOPBACK_HOSTNAMES.has(url.hostname)) {
+    throw new AuthError(`Databricks host '${host}' must use https so the token is not sent in clear text.`);
+  }
+  return normalized;
 }
 
-function cachedToken(now: () => number, fetchToken: () => Promise<{ token: string; expiresAt: number }>): () => Promise<string> {
+function cachedToken(deps: AuthDependencies, method: AuthMethod, fetchToken: () => Promise<{ token: string; expiresAt: number }>): () => Promise<string> {
   let cache: { token: string; expiresAt: number } | undefined;
   return async () => {
-    if (cache === undefined || now() >= cache.expiresAt - REFRESH_MARGIN_MS) {
+    if (cache === undefined || deps.now() >= cache.expiresAt - REFRESH_MARGIN_MS) {
       cache = await fetchToken();
+      try {
+        deps.onRefresh?.(method);
+      } catch {
+        // An observability hook must never break authentication.
+      }
     }
     return cache.token;
   };
@@ -56,7 +85,7 @@ function patProvider(host: string, token: string, profileWarehouseId: string | u
 }
 
 function m2mProvider(host: string, clientId: string, clientSecret: string, profileWarehouseId: string | undefined, deps: AuthDependencies): AuthProvider {
-  const getToken = cachedToken(deps.now, async () => {
+  const getToken = cachedToken(deps, "oauth-m2m", async () => {
     const response = await deps.fetch(`${host}/oidc/v1/token`, {
       method: "POST",
       headers: {
@@ -79,7 +108,7 @@ function m2mProvider(host: string, clientId: string, clientSecret: string, profi
 }
 
 function u2mProvider(host: string, profile: string, profileWarehouseId: string | undefined, deps: AuthDependencies): AuthProvider {
-  const getToken = cachedToken(deps.now, async () => {
+  const getToken = cachedToken(deps, "oauth-u2m", async () => {
     let output: string;
     try {
       output = await deps.runCli(["auth", "token", "--profile", profile]);
@@ -122,6 +151,10 @@ function fromEnvironment(env: Environment, deps: AuthDependencies): AuthProvider
   return undefined;
 }
 
+/**
+ * Resolves credentials in order: explicit profile, environment variables, then the named or `DEFAULT` profile.
+ * @throws {AuthError} When no supported credentials are found; the message lists the manual steps.
+ */
 export async function resolveAuth(request: AuthRequest, deps: AuthDependencies): Promise<AuthProvider> {
   if (!request.explicitProfile) {
     const provider = fromEnvironment(request.env, deps);
@@ -156,6 +189,7 @@ export async function resolveAuth(request: AuthRequest, deps: AuthDependencies):
 
 const execFileAsync = promisify(execFile);
 
+/** Real dependencies: `~/.databrickscfg` (or `DATABRICKS_CONFIG_FILE`), global `fetch` and the `databricks` CLI. */
 export function defaultAuthDependencies(env: Environment): AuthDependencies {
   const configPath = env.DATABRICKS_CONFIG_FILE ?? join(homedir(), ".databrickscfg");
   return {
