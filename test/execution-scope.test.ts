@@ -178,3 +178,23 @@ test("the work gets its own execution and is the current one while it runs", asy
     assert.deepEqual(entries.map((logged) => logged.message), ["inside the work"]);
   });
 });
+
+test("a summary that throws does not discard the result: the entry is written without it and the execution completes", async () => {
+  await withLogs("stdio", async (context) => {
+    const scope = createExecutionScope(context.logs);
+    const result = await scope.run({ toolName: "t" }, async () => ({ state: "SUCCEEDED", rows: 3 }), {
+      ...entry,
+      summarize: () => {
+        throw new Error("summary bug");
+      },
+    });
+    assert.deepEqual(result, { state: "SUCCEEDED", rows: 3 });
+    const { execution, entries } = recorded(context, "t");
+    assert.equal(execution.status, "completed");
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.level, "info");
+    assert.equal(entries[0]?.message, "Tool call completed");
+    assert.equal(entries[0]?.metadata?.statement, "SELECT 1");
+    assert.equal(typeof entries[0]?.metadata?.durationMs, "number");
+  });
+});
