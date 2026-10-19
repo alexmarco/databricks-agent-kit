@@ -410,11 +410,20 @@ export function createStatementLifecycle(client: DatabricksClient, options: Stat
     }
   }
 
+  /** Requests a fresh presigned link for result chunk `index` of an export; rejects with the signal's reason on abort. */
+  async function exportChunkLink(statementId: string, index: number, signal: AbortSignal): Promise<ExportChunkLink> {
+    const path = `${STATEMENTS_PATH}/${encodeURIComponent(statementId)}/result/chunks/${index}`;
+    const response = await untilAborted(client.get<{ external_links?: ApiExternalLink[] }>(path), signal);
+    const link = response.external_links?.[0];
+    if (link === undefined) throw new Error(`Export: Databricks returned no link for chunk ${index}.`);
+    return chunkLink(link);
+  }
+
   async function cancel(statementId: string): Promise<void> {
     await client.post(`${STATEMENTS_PATH}/${encodeURIComponent(statementId)}/cancel`);
   }
 
-  return { submit, query, submitExport, awaitExport, get, cancel };
+  return { submit, query, submitExport, awaitExport, exportChunkLink, get, cancel };
 }
 
 /** Methods returned by {@link createStatementLifecycle}. */

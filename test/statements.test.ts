@@ -610,6 +610,29 @@ test("awaitExport stops polling at once when the signal aborts during a wait", a
   assert.equal(calls.length, 1);
 });
 
+test("exportChunkLink requests the link of a chunk by the encoded statement id", async () => {
+  const { client, calls } = fakeClient(() => ({ external_links: [{ chunk_index: 2, row_count: 7, external_link: "https://storage.example/chunk-2", expiration: "2030-01-01T00:00:00.000Z" }] }));
+  const link = await createStatementLifecycle(client, options).exportChunkLink("ex 1", 2, new AbortController().signal);
+  assert.deepEqual(calls.map((call) => `${call.method} ${call.path}`), ["GET /api/2.0/sql/statements/ex%201/result/chunks/2"]);
+  assert.deepEqual(link, { url: "https://storage.example/chunk-2", rowCount: 7, expiration: "2030-01-01T00:00:00.000Z" });
+});
+
+test("exportChunkLink fails when Databricks returns no link", async () => {
+  for (const response of [{}, { external_links: [] }]) {
+    const { client } = fakeClient(() => response);
+    await assert.rejects(createStatementLifecycle(client, options).exportChunkLink("ex1", 4, new AbortController().signal), /no link for chunk 4/);
+  }
+});
+
+test("exportChunkLink rejects with the signal's reason when the signal aborts during the request", async () => {
+  const controller = new AbortController();
+  const client = { host: "https://ws", get: () => new Promise(() => undefined), post: async () => ({}) } as unknown as DatabricksClient;
+  const pending = createStatementLifecycle(client, options).exportChunkLink("ex1", 0, controller.signal);
+  const reason = new Error("stop");
+  controller.abort(reason);
+  await assert.rejects(pending, reason);
+});
+
 test("awaitExport rejects at once with an already aborted signal", async () => {
   const { client, calls } = fakeClient(() => exportSucceeded());
   const controller = new AbortController();
