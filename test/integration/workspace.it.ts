@@ -85,7 +85,7 @@ const partFiles = async () => (await readdir(exportDir)).filter((entry) => entry
 test("resolves a warehouse and runs SELECT 1", async () => {
   const warehouses = await warehouseSelection.list();
   assert.ok(warehouses.length > 0, "at least one accessible warehouse");
-  const result = await statements.submit({ statement: "SELECT 1 AS result" }, "agent");
+  const result = await statements.submit({ statement: "SELECT 1 AS result" });
   if (result.state !== "SUCCEEDED") {
     const final = await statements.get(result.statementId);
     assert.equal(final.state, "SUCCEEDED");
@@ -116,14 +116,14 @@ test("lineage returns data or an explicit note when unavailable", async () => {
 });
 
 test("the read-only guard blocks writes before reaching the workspace", async () => {
-  await assert.rejects(statements.submit({ statement: `DELETE FROM ${table}` }, "agent"), /--allow-writes/);
+  await assert.rejects(statements.submit({ statement: `DELETE FROM ${table}` }), /--allow-writes/);
 });
 
 test("queries in every read-only form pass DESCRIBE QUERY and run", async () => {
   const queries = [`TABLE ${table}`, "VALUES (1)", `FROM ${table} SELECT *`, "WITH t AS (SELECT 1) SELECT * FROM t", "(SELECT 1)"];
   for (const statement of queries) {
     try {
-      const result = await statements.submit({ statement, rowLimit: 1 }, "agent");
+      const result = await statements.submit({ statement, rowLimit: 1 });
       if (result.state === "PENDING" || result.state === "RUNNING") await statements.cancel(result.statementId);
     } catch (error) {
       if (error instanceof ReadOnlyViolationError) {
@@ -162,7 +162,7 @@ test("read-only bypass attempts are rejected", async () => {
     `SHOW CATALOGS; DROP TABLE IF EXISTS ${NEVER_EXISTS}`,
   ];
   for (const statement of rejected) {
-    await assert.rejects(statements.submit({ statement }, "agent"), rejectedWith(statement, ReadOnlyViolationError));
+    await assert.rejects(statements.submit({ statement }), rejectedWith(statement, ReadOnlyViolationError));
   }
 });
 
@@ -171,7 +171,7 @@ test("Databricks rejects several statements in one call even with writes enabled
   const adr = "ADR 0008 and the read-only design assume the Statement Execution API rejects several statements in one call; stop and report it to the maintainer.";
   let result: StatementResult;
   try {
-    result = await writableStatements.submit({ statement }, "agent");
+    result = await writableStatements.submit({ statement });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     assert.ok(

@@ -22,9 +22,9 @@ Terms used in the code and the documents of `databricks-agent-kit`. Design vocab
 | **Statement**            | One SQL statement submitted to the Databricks Statement Execution API, identified by a statement id.                                                              |
 | **Plain statement**      | A statement submitted inline (`INLINE`, `JSON_ARRAY`): its result is bounded and returned to the caller. Opposite of an export.                                   |
 | **Export**               | A statement submitted as `EXTERNAL_LINKS` whose full result is downloaded by the export manager to a file (ADR 0003).                                             |
-| **Origin**               | Who wrote a statement: the `agent` (`execute_sql`, exports) or the `server` (metadata queries, doctor probes). Only agent statements go through the read-only policy. |
+| **Agent statement**      | A statement the agent wrote (`execute_sql`, exports): `submit` and `submitExport` always put it through the read-only policy unless writes are allowed (ADR 0015). |
 | **Read-only policy**     | The rule of ADR 0008, applied in one place of the module: reject an inner `;`, accept plain leading read commands, otherwise analyse with `DESCRIBE QUERY`.        |
-| **Server-written SQL**   | SQL that this server composes itself; it skips the read-only policy.                                                                                              |
+| **Server-written SQL**   | SQL that this server composes itself (metadata queries, doctor probes); it skips the read-only policy through `query` or `submitServerSql`, which the tool handlers never receive. |
 | **Poll / wait**          | `get` with `waitSeconds` re-fetches a statement with growing waits (1 s, 2 s, 3 s...) until it is no longer `PENDING` or `RUNNING` or the wait is spent.          |
 | **Result shaping**       | Turning an API statement into a bounded result: columns, rows capped by the row limit and the byte limit, and a `truncated` flag.                                 |
 | **Await export**         | `awaitExport` polls an export statement until it succeeds, with waits growing to 10 s and no upper bound, and describes its result (ADR 0010). Opposite of the bounded `get` wait. |
@@ -52,4 +52,4 @@ Terms used in the code and the documents of `databricks-agent-kit`. Design vocab
 | **Workspace**           | What `session.workspace()` gives: the credentials (`auth`), `client`, `warehouses`, `statements`, `metadata` and `exports` of one session, built once and reused.                                      |
 | **Workspace connection** | The part of the workspace that `connectWorkspace` builds without a log service: `auth`, `client`, `warehouses` and `statements`. `dak doctor` uses it with its smaller `DOCTOR_LIMITS`.           |
 | **Adapters**            | The `WorkspaceAdapters` of a session: `resolveAuth`, `createClient`, `fetch` and `sleep`, real in `src/cli.ts` and fakes in tests.                                                                   |
-| **Closing**             | `session.close()`: cancels the running exports and their Databricks statements; it never resolves credentials, so a session that created nothing closes without touching Databricks.                |
+| **Closing**             | `session.close()`: waits for a build in flight, cancels the running exports and their Databricks statements and refuses later `workspace()` calls and export starts (ADR 0015); it never resolves credentials, so a session that created nothing closes without touching Databricks. |

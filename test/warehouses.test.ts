@@ -68,6 +68,45 @@ test("the automatic choice is remembered across calls", async () => {
   assert.equal(paths.length, 1);
 });
 
+test("simultaneous first calls list the warehouses once and report the choice once", async () => {
+  const events: unknown[] = [];
+  let listings = 0;
+  const client: DatabricksClient = {
+    host: "https://ws",
+    get: async <T>() => {
+      listings++;
+      await new Promise((settle) => setTimeout(settle, 5));
+      return { warehouses: [{ id: "w1", name: "a", state: "RUNNING" }] } as T;
+    },
+    post: async <T>() => ({}) as T,
+  };
+  const warehouses = createWarehouseSelection(client, { ...noDefault, onWarehouseChosen: (event) => events.push(event) });
+  assert.deepEqual(await Promise.all([warehouses.resolve(), warehouses.resolve()]), ["w1", "w1"]);
+  assert.equal(listings, 1);
+  assert.deepEqual(events, [{ warehouseId: "w1", name: "a", reason: "running" }]);
+});
+
+test("simultaneous calls share a failed choice, and the next call tries again", async () => {
+  let accessible: unknown[] = [];
+  let listings = 0;
+  const client: DatabricksClient = {
+    host: "https://ws",
+    get: async <T>() => {
+      listings++;
+      await new Promise((settle) => setTimeout(settle, 5));
+      return { warehouses: accessible } as T;
+    },
+    post: async <T>() => ({}) as T,
+  };
+  const warehouses = createWarehouseSelection(client, noDefault);
+  const failures = await Promise.allSettled([warehouses.resolve(), warehouses.resolve()]);
+  assert.deepEqual(failures.map((outcome) => outcome.status), ["rejected", "rejected"]);
+  assert.equal(listings, 1);
+  accessible = [{ id: "w1", name: "a", state: "RUNNING" }];
+  assert.equal(await warehouses.resolve(), "w1");
+  assert.equal(listings, 2);
+});
+
 test("no accessible warehouse is an actionable error", async () => {
   const { client } = fakeClient([]);
   await assert.rejects(createWarehouseSelection(client, noDefault).resolve(), (error: unknown) => {

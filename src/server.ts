@@ -6,18 +6,23 @@ import { describeArguments } from "./logging/arguments.ts";
 import type { LogRepository } from "./logging/repository.ts";
 import type { LogService } from "./logging/service.ts";
 import { createStatementLookup } from "./statement-lookup.ts";
+import type { StatementLifecycle } from "./statements.ts";
 import type { Workspace } from "./workspace-session.ts";
 
 /** Names of every tool the server registers. */
 export const TOOL_NAMES = ["list_objects", "describe_table", "search_metadata", "execute_sql", "get_statement"] as const;
+
+/** The part of the statement lifecycle that runs the agent's statements: always under the read-only policy. */
+export type AgentStatements = Pick<StatementLifecycle, "submit" | "get" | "cancel">;
 
 /** Services behind the MCP tools and resources. */
 export interface ServerDependencies {
   /**
    * The Databricks modules, from the workspace session (ADR 0014). Each tool call and recorded resource read awaits it inside
    * its execution, so a failed credential resolution is the single error of that call and the next call tries again.
+   * The tool handlers receive only the statement methods of the agent: not the ones for server-written SQL (ADR 0015).
    */
-  workspace(): Promise<Pick<Workspace, "warehouses" | "statements" | "metadata" | "exports">>;
+  workspace(): Promise<Pick<Workspace, "warehouses" | "metadata" | "exports"> & { statements: AgentStatements }>;
   /** Opens the execution of each tool call, recorded resource read and export; the services annotate through it. */
   scope: ExecutionScope;
   logs: LogService;
@@ -78,12 +83,16 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     // The JSON Schema `$schema` URI tells the agent nothing and costs about 60 characters per tool in every session.
     server.registerTool(name, { description, inputSchema: inputSchema.meta({ $schema: undefined }), annotations }, (async (args: z.output<Schema>) => {
       try {
-        const result = await scope.run({ toolName: name }, () => run(args), {
-          message: "Tool call completed",
-          arguments: describeArguments(args as Record<string, unknown>),
-          summarize,
-        });
-        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+        // The reply is serialized inside the scope, so a result that cannot be serialized fails the execution.
+        const reply = await scope.run(
+          { toolName: name },
+          async () => {
+            const result = await run(args);
+            return { result, text: JSON.stringify(result) };
+          },
+          { message: "Tool call completed", arguments: describeArguments(args as Record<string, unknown>), summarize: ({ result }) => summarize(result) },
+        );
+        return { content: [{ type: "text" as const, text: reply.text }] };
       } catch (error) {
         return { isError: true, content: [{ type: "text" as const, text: errorMessage(error) }] };
       }
@@ -99,17 +108,17 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     read: (url: URL, variables: Record<string, string | string[]>) => unknown,
   ) {
     const handler = async (url: URL, variables: Record<string, string | string[]> = {}) => {
-      const reply = (payload: unknown) => ({ contents: [{ uri: url.href, mimeType: "application/json", text: JSON.stringify(payload) }] });
+      const reply = (text: string) => ({ contents: [{ uri: url.href, mimeType: "application/json", text }] });
       if (!record) {
         logs.flush();
         try {
-          return reply(await read(url, variables));
+          return reply(JSON.stringify(await read(url, variables)));
         } catch (error) {
           if (!(error instanceof DakError)) logs.lifecycle.error(error instanceof Error ? error.message : String(error), undefined, error);
           throw error;
         }
       }
-      return reply(await scope.run({ resourceUri: url.href }, async () => read(url, variables)));
+      return reply(await scope.run({ resourceUri: url.href }, async () => JSON.stringify(await read(url, variables))));
     };
     const config = { title: name, description, mimeType: "application/json" };
     if (typeof uri === "string") server.registerResource(name, uri, config, (url) => handler(url));
@@ -149,7 +158,7 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     async (args) => {
       const { statements, exports } = await workspace();
       const request = { statement: args.statement, parameters: args.parameters, catalog: args.catalog, schema: args.schema, warehouseId: args.warehouse_id };
-      if (args.export === undefined) return statements.submit({ ...request, rowLimit: args.row_limit }, "agent");
+      if (args.export === undefined) return statements.submit({ ...request, rowLimit: args.row_limit });
       const state = await exports.start({ statement: request, format: args.export.format, name: args.export.name });
       return { statementId: state.statementId, state: "PENDING", export: state };
     },

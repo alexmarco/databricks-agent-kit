@@ -40,7 +40,8 @@ interface ApiWarehouse {
  * statement lifecycle module (ADR 0009), which receives `resolve` as an injected function.
  */
 export function createWarehouseSelection(client: DatabricksClient, options: WarehouseSelectionOptions) {
-  let automaticWarehouse: string | undefined;
+  /** The automatic choice, in flight or made; a failed choice is not kept. */
+  let automaticWarehouse: Promise<string> | undefined;
 
   async function fetchWarehouses(): Promise<ApiWarehouse[]> {
     const response = await client.get<{ warehouses?: ApiWarehouse[] }>("/api/2.0/sql/warehouses");
@@ -56,23 +57,29 @@ export function createWarehouseSelection(client: DatabricksClient, options: Ware
     return first === undefined ? undefined : { warehouse: first, reason: "first" };
   }
 
+  async function chooseAutomatically(): Promise<string> {
+    const chosen = chooseWarehouse(await fetchWarehouses());
+    if (chosen === undefined) {
+      throw new SqlError(
+        "No SQL warehouse is accessible to this identity. Create one or get CAN USE on an existing one, or set DATABRICKS_WAREHOUSE_ID.",
+      );
+    }
+    try {
+      options.onWarehouseChosen?.({ warehouseId: chosen.warehouse.id, name: chosen.warehouse.name, reason: chosen.reason });
+    } catch {
+      // The callback only observes the choice; its failure must not fail the request.
+    }
+    return chosen.warehouse.id;
+  }
+
   async function resolve(explicit?: string): Promise<string> {
     if (explicit !== undefined) return explicit;
     if (options.defaultWarehouseId !== undefined) return options.defaultWarehouseId;
-    if (automaticWarehouse === undefined) {
-      const chosen = chooseWarehouse(await fetchWarehouses());
-      if (chosen === undefined) {
-        throw new SqlError(
-          "No SQL warehouse is accessible to this identity. Create one or get CAN USE on an existing one, or set DATABRICKS_WAREHOUSE_ID.",
-        );
-      }
-      automaticWarehouse = chosen.warehouse.id;
-      try {
-        options.onWarehouseChosen?.({ warehouseId: chosen.warehouse.id, name: chosen.warehouse.name, reason: chosen.reason });
-      } catch {
-        // The callback only observes the choice; its failure must not fail the request.
-      }
-    }
+    // The promise is kept while the choice is in flight, so simultaneous first calls share one listing and one event.
+    automaticWarehouse ??= chooseAutomatically().catch((error: unknown) => {
+      automaticWarehouse = undefined;
+      throw error;
+    });
     return automaticWarehouse;
   }
 

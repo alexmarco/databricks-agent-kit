@@ -32,12 +32,30 @@ export interface ExecutionScope {
    * `completed` when `work` resolves, `cancelled` when it throws {@link ExecutionCancelled} (no entry), `failed` for any
    * other error. Every outcome other than cancelled writes exactly one entry. With `entry`, a success writes the `info`
    * entry and both outcomes carry `{ ...entry.arguments, durationMs, ...summary, ...diagnostics }` (a failure has no
-   * summary); without it, a success writes nothing and a failure writes its entry without metadata. The error of
+   * summary; a summary that throws is left out and never turns a success into a failure); without it, a success writes nothing and a failure writes its entry without metadata. The error of
    * `work` is always rethrown, after the execution has ended.
    */
   run<T>(target: ExecutionTarget, work: (execution: ExecutionHandle) => Promise<T>, entry?: FinalEntry<T>): Promise<T>;
   /** Adds diagnostics to the final entry of the current scope; outside any scope it does nothing. */
   annotate(diagnostics: ExecutionDiagnostics): void;
+}
+
+/**
+ * Writes the success entry. It only observes the work, which already happened: a summary that throws is left out of the
+ * entry, and an entry that cannot be written is dropped, so neither turns the work's result into a failure.
+ */
+function writeSuccessEntry<T>(execution: ExecutionHandle, entry: FinalEntry<T>, result: T, metadata: (summary?: Record<string, unknown>) => Record<string, unknown> | undefined): void {
+  let summary: Record<string, unknown> | undefined;
+  try {
+    summary = entry.summarize?.(result);
+  } catch {
+    summary = undefined;
+  }
+  try {
+    execution.info(entry.message, metadata(summary));
+  } catch {
+    // Nothing is left to record the failure on.
+  }
 }
 
 /** Creates the execution scope on top of the log service, whose `current()` tells which scope the caller runs in. */
@@ -55,7 +73,7 @@ export function createExecutionScope(logs: LogService): ExecutionScope {
       return logs.run(execution, async () => {
         try {
           const result = await work(execution);
-          if (entry !== undefined) execution.info(entry.message, entryMetadata(entry.summarize?.(result)));
+          if (entry !== undefined) writeSuccessEntry(execution, entry, result, entryMetadata);
           execution.complete();
           return result;
         } catch (error) {

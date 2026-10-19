@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import type { AuthProvider } from "../src/auth.ts";
 import type { DatabricksClient, QueryValue } from "../src/client.ts";
-import { AuthError } from "../src/errors.ts";
+import { AuthError, DakError } from "../src/errors.ts";
 import { ReadOnlyViolationError } from "../src/statements.ts";
 import { connectWorkspace, createWorkspaceSession, type WorkspaceAdapters, type WorkspaceLimits } from "../src/workspace-session.ts";
 import { withLogs } from "./helpers.ts";
@@ -117,13 +117,53 @@ test("closing cancels a running export together with its Databricks statement", 
   });
 });
 
+test("closing while the first workspace is being built waits for it, and no export can start on it afterwards", async () => {
+  await withLogs("stdio", async ({ logs, dir }) => {
+    const { adapters: fake, state, workspace } = adapters();
+    let release: () => void = () => undefined;
+    const slowCredentials = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const session = createWorkspaceSession({ ...fake, resolveAuth: async (onRefresh) => (await slowCredentials, fake.resolveAuth(onRefresh)) }, sessionOptions(dir, logs));
+
+    const building = session.workspace();
+    let closed = false;
+    const closing = session.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(closed, false, "close waits for the pending build");
+
+    release();
+    const { exports } = await building;
+    await closing;
+    await assert.rejects(exports.start({ statement: { statement: "SELECT 1" }, format: "csv" }), (error: unknown) => error instanceof DakError && /shutting down/.test(error.message));
+    assert.equal(workspace.calls.filter((call) => call.method === "POST").length, 0);
+    await assert.rejects(session.workspace(), (error: unknown) => error instanceof DakError && /shutting down/.test(error.message));
+    assert.equal(state.resolutions, 1);
+  });
+});
+
+test("closing while the first build fails does not retry it and refuses later calls", async () => {
+  await withLogs("stdio", async ({ logs, dir }) => {
+    const { adapters: fake, state } = adapters(undefined, 1);
+    const session = createWorkspaceSession(fake, sessionOptions(dir, logs));
+    const building = session.workspace();
+    const rejected = assert.rejects(building, AuthError);
+    await session.close();
+    await rejected;
+    await assert.rejects(session.workspace(), DakError);
+    assert.equal(state.resolutions, 1);
+  });
+});
+
 test("the workspace limits reach the statement lifecycle", async () => {
   await withLogs("stdio", async ({ logs, dir }) => {
     const { adapters: fake, workspace } = adapters();
     const { statements } = await createWorkspaceSession(fake, sessionOptions(dir, logs)).workspace();
-    await statements.submit({ statement: "SHOW TABLES", rowLimit: 1000 }, "agent");
+    await statements.submit({ statement: "SHOW TABLES", rowLimit: 1000 });
     assert.equal((workspace.calls.find((call) => call.method === "POST")?.body as { row_limit: number }).row_limit, 50);
-    await assert.rejects(statements.submit({ statement: "SELECT 1; DROP TABLE t" }, "agent"), ReadOnlyViolationError);
+    await assert.rejects(statements.submit({ statement: "SELECT 1; DROP TABLE t" }), ReadOnlyViolationError);
   });
 });
 
@@ -149,8 +189,8 @@ test("the credentials, the warehouse choice and the diagnostics of a call reach 
     const session = createWorkspaceSession(fake, sessionOptions(dir, logs));
     const { statements } = await session.workspace();
     await session.scope.run({ toolName: "execute_sql" }, async () => {
-      await statements.submit({ statement: "SELECT 1" }, "agent");
-      await statements.submit({ statement: "SELECT 2" }, "agent");
+      await statements.submit({ statement: "SELECT 1" });
+      await statements.submit({ statement: "SELECT 2" });
     }, { message: "Tool call completed" });
 
     logs.flush();
@@ -191,7 +231,7 @@ test("connecting without a log service resolves the credentials and builds the m
   assert.deepEqual(state.observers, {});
   assert.equal(state.onRefresh, undefined);
   assert.equal(await connection.warehouses.resolve(), "wh-auto");
-  const result = await connection.statements.submit({ statement: "SELECT 1", rowLimit: 1 }, "server");
+  const result = await connection.statements.submitServerSql({ statement: "SELECT 1", rowLimit: 1 });
   assert.equal(result.state, "SUCCEEDED");
 });
 
