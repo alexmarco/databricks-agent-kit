@@ -20,5 +20,6 @@ Possible statuses: Proposed, Accepted, Superseded.
 | [0012](0012-warehouse-selection-module.md) | Warehouse selection module | Accepted |
 | [0013](0013-execution-scope-module.md) | Execution scope module | Accepted |
 | [0014](0014-workspace-session-module.md) | Workspace session module | Accepted |
+| [0015](0015-review-fixes-for-the-deepened-modules.md) | Review fixes for the deepened modules | Accepted |
 
 Current design: [docs/design.md](../design.md).
