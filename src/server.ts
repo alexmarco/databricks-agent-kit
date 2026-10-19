@@ -2,25 +2,22 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { DakError } from "./errors.ts";
 import type { ExecutionScope } from "./execution-scope.ts";
-import type { ExportManager } from "./export/manager.ts";
 import { describeArguments } from "./logging/arguments.ts";
 import type { LogRepository } from "./logging/repository.ts";
 import type { LogService } from "./logging/service.ts";
-import type { MetadataService } from "./metadata.ts";
 import { createStatementLookup } from "./statement-lookup.ts";
-import type { WarehouseSelection } from "./warehouses.ts";
-import type { StatementLifecycle } from "./statements.ts";
+import type { Workspace } from "./workspace-session.ts";
 
 /** Names of every tool the server registers. */
 export const TOOL_NAMES = ["list_objects", "describe_table", "search_metadata", "execute_sql", "get_statement"] as const;
 
 /** Services behind the MCP tools and resources. */
 export interface ServerDependencies {
-  /** Warehouse selection: the warehouses resource. */
-  warehouses: WarehouseSelection;
-  statements: StatementLifecycle;
-  metadata: MetadataService;
-  exports: ExportManager;
+  /**
+   * The Databricks modules, from the workspace session (ADR 0014). Each tool call and recorded resource read awaits it inside
+   * its execution, so a failed credential resolution is the single error of that call and the next call tries again.
+   */
+  workspace(): Promise<Pick<Workspace, "warehouses" | "statements" | "metadata" | "exports">>;
   /** Opens the execution of each tool call, recorded resource read and export; the services annotate through it. */
   scope: ExecutionScope;
   logs: LogService;
@@ -63,8 +60,7 @@ function summarize(result: unknown): Record<string, unknown> {
  * report; an unexpected error while reading them is logged on the lifecycle execution.
  */
 export function createMcpServer(deps: ServerDependencies): McpServer {
-  const { warehouses, statements, metadata, exports, scope, logs, repository } = deps;
-  const lookup = createStatementLookup({ statements, exports });
+  const { workspace, scope, logs, repository } = deps;
   const server = new McpServer({ name: "databricks-agent-kit", version: deps.version }, { instructions: INSTRUCTIONS });
 
   function tool<Schema extends z.ZodObject>(
@@ -124,19 +120,19 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     "list_objects",
     "Catalogs; schemas of catalog; tables of catalog and schema. pattern: substring or glob.",
     z.object({ catalog: z.string().optional(), schema: z.string().optional(), pattern: z.string().optional(), limit: z.number().int().min(1).max(500).optional() }),
-    (args) => metadata.listObjects(args),
+    async (args) => (await workspace()).metadata.listObjects(args),
   );
   tool(
     "describe_table",
     "Columns, keys and tags of catalog.schema.table; optional sample and lineage. Sample or lineage problems are reported in notes.",
     z.object({ full_name: z.string(), sample_rows: z.number().int().min(1).max(100).optional(), lineage: z.boolean().optional() }),
-    (args) => metadata.describeTable(args.full_name, { sampleRows: args.sample_rows, lineage: args.lineage }),
+    async (args) => (await workspace()).metadata.describeTable(args.full_name, { sampleRows: args.sample_rows, lineage: args.lineage }),
   );
   tool(
     "search_metadata",
     "Find tables and columns by name or comment.",
     z.object({ query: z.string().min(1), catalog: z.string().optional(), limit: z.number().int().min(1).max(200).optional() }),
-    (args) => metadata.searchMetadata(args),
+    async (args) => (await workspace()).metadata.searchMetadata(args),
   );
   tool(
     "execute_sql",
@@ -151,6 +147,7 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
       export: z.object({ format: z.enum(["csv", "parquet", "sqlite"]), name: z.string().max(64).optional() }).optional(),
     }),
     async (args) => {
+      const { statements, exports } = await workspace();
       const request = { statement: args.statement, parameters: args.parameters, catalog: args.catalog, schema: args.schema, warehouseId: args.warehouse_id };
       if (args.export === undefined) return statements.submit({ ...request, rowLimit: args.row_limit }, "agent");
       const state = await exports.start({ statement: request, format: args.export.format, name: args.export.name });
@@ -161,11 +158,15 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     "get_statement",
     "Poll or cancel a statement or export of execute_sql.",
     z.object({ statement_id: z.string(), wait_seconds: z.number().int().min(0).max(30).optional(), cancel: z.boolean().optional() }),
-    async (args) => (args.cancel === true ? lookup.cancel(args.statement_id) : lookup.get(args.statement_id, { waitSeconds: args.wait_seconds })),
+    async (args) => {
+      const { statements, exports } = await workspace();
+      const lookup = createStatementLookup({ statements, exports });
+      return args.cancel === true ? lookup.cancel(args.statement_id) : lookup.get(args.statement_id, { waitSeconds: args.wait_seconds });
+    },
   );
 
   resource("warehouses", "resource://databricks/warehouses", "SQL warehouses visible to this identity and the default one.", true, async () => ({
-    warehouses: await warehouses.list(),
+    warehouses: await (await workspace()).warehouses.list(),
   }));
   resource("recent-errors", "resource://logs/errors/recent", "Most recent error and fatal log entries.", false, () => ({
     generatedAt: new Date().toISOString(),
