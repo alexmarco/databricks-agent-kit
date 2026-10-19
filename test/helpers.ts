@@ -4,8 +4,9 @@ import { join } from "node:path";
 import type { ExportManager } from "../src/export/manager.ts";
 import type { ExportFormat, ExportState } from "../src/export/types.ts";
 import type { MetadataService } from "../src/metadata.ts";
-import type { ExecuteSqlRequest, SqlService, StatementResult } from "../src/sql.ts";
-import { SqlError } from "../src/sql.ts";
+import type { SqlService } from "../src/sql.ts";
+import type { ExecuteSqlRequest, StatementLifecycle, StatementResult } from "../src/statements.ts";
+import { SqlError } from "../src/statements.ts";
 import { openLogRepository, type LogRepository } from "../src/logging/repository.ts";
 import { createLogService, type LogService } from "../src/logging/service.ts";
 import type { ExecutionTransport } from "../src/logging/repository.ts";
@@ -24,20 +25,22 @@ export function fakeServices() {
   const sqlRequests: ExecuteSqlRequest[] = [];
   const getStatementCalls: Array<{ statementId: string; options: unknown }> = [];
   const cancelledStatements: string[] = [];
-  const sql = {
-    executeSql: async (request: ExecuteSqlRequest) => {
+  const statements = {
+    submit: async (request: ExecuteSqlRequest) => {
       sqlRequests.push(request);
       if (request.statement.startsWith("FAIL")) throw new SqlError("[TABLE_OR_VIEW_NOT_FOUND] missing (SQLSTATE 42P01)");
       return okResult;
     },
-    runQuery: async () => okResult,
-    getStatement: async (statementId: string, options?: unknown) => {
+    get: async (statementId: string, options?: unknown) => {
       getStatementCalls.push({ statementId, options });
       return { ...okResult, statementId };
     },
-    cancelStatement: async (statementId: string) => {
+    cancel: async (statementId: string) => {
       cancelledStatements.push(statementId);
     },
+  } as unknown as StatementLifecycle;
+  const sql = {
+    runQuery: async () => okResult,
     resolveWarehouse: async () => "wh1",
     listWarehouses: async () => [{ id: "wh1", name: "Serverless", state: "RUNNING", size: "2X-Small", serverless: true, isDefault: true }],
   } as unknown as SqlService;
@@ -84,7 +87,7 @@ export function fakeServices() {
     cleanup: async () => undefined,
     close: async () => undefined,
   };
-  return { sql, metadata, exports, exportStates, sqlRequests, getStatementCalls, cancelledStatements, exportCalls };
+  return { sql, statements, metadata, exports, exportStates, sqlRequests, getStatementCalls, cancelledStatements, exportCalls };
 }
 
 export async function withLogs<T>(transport: ExecutionTransport, run: (context: { repository: LogRepository; logs: LogService; dir: string }) => Promise<T>): Promise<T> {

@@ -17,6 +17,7 @@ import { createLogService } from "./logging/service.ts";
 import { createMetadataService, type MetadataService } from "./metadata.ts";
 import { createMcpServer } from "./server.ts";
 import { createSqlService, type SqlService } from "./sql.ts";
+import { createStatementLifecycle, type StatementLifecycle } from "./statements.ts";
 
 const installDir = fileURLToPath(new URL("..", import.meta.url));
 const { version } = JSON.parse(readFileSync(join(installDir, "package.json"), "utf8")) as { version: string };
@@ -87,14 +88,22 @@ async function runMcp(settings: Settings): Promise<void> {
       onWarehouseChosen: (event) => logs.current().info("Warehouse chosen automatically", { ...event }),
     });
     logs.lifecycle.info("Databricks credentials resolved", { host: auth.host, method: auth.method });
+    const statements = createStatementLifecycle(client, {
+      maxRows: settings.maxRows,
+      allowWrites: settings.allowWrites,
+      maxResultBytes: 100_000,
+      maxExportBytes: settings.exportMaxBytes,
+      resolveWarehouse: sql.resolveWarehouse,
+    });
     const exports = createExportManager({ client, sql, fetch: clientDependencies.fetch, dir: settings.exportDir, logs, sleep: clientDependencies.sleep });
     createdExports = exports;
-    return { sql, metadata: createMetadataService(client, sql), exports };
+    return { sql, statements, metadata: createMetadataService(client, sql), exports };
   });
   const sql = lazy<SqlService>(async () => (await services()).sql);
+  const statements = lazy<StatementLifecycle>(async () => (await services()).statements);
   const metadata = lazy<MetadataService>(async () => (await services()).metadata);
   const exports = lazy<ExportManager>(async () => (await services()).exports);
-  const factory = () => createMcpServer({ sql, metadata, exports, logs, repository, version, allowWrites: settings.allowWrites });
+  const factory = () => createMcpServer({ sql, statements, metadata, exports, logs, repository, version, allowWrites: settings.allowWrites });
 
   let stopTransport: () => Promise<void>;
   try {

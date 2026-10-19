@@ -205,10 +205,10 @@ test("a tool call writes exactly one info entry with described arguments and the
   });
 });
 
-test("the read-only check duration reported by the SQL service is logged as checkMs", async () => {
+test("the read-only check duration reported by the statement lifecycle module is logged as checkMs", async () => {
   await withLogs("stdio", async (context) => {
     const connection = await connect(context);
-    (connection.services.sql as unknown as { executeSql: (request: unknown, diagnostics?: { checkMs?: number }) => Promise<unknown> }).executeSql = async (_request, diagnostics) => {
+    (connection.services.statements as unknown as { submit: (request: unknown, origin: string, diagnostics?: { checkMs?: number }) => Promise<unknown> }).submit = async (_request, _origin, diagnostics) => {
       if (diagnostics !== undefined) diagnostics.checkMs = 42;
       return okResult;
     };
@@ -241,7 +241,7 @@ test("a DakError fails the execution as a warning without stack trace", async ()
 test("an unexpected error fails the execution as an error with its stack trace", async () => {
   await withLogs("stdio", async (context) => {
     const connection = await connect(context);
-    (connection.services.sql as unknown as { executeSql: () => Promise<never> }).executeSql = async () => {
+    (connection.services.statements as unknown as { submit: () => Promise<never> }).submit = async () => {
       throw new Error("driver crashed");
     };
     const result = await connection.client.callTool({ name: "execute_sql", arguments: { statement: "SELECT 1" } });
@@ -264,7 +264,7 @@ test("log resources read from SQLite, including the latest calls, without openin
   await withLogs("stdio", async (context) => {
     const connection = await connect(context);
     const { client, services } = connection;
-    (services.sql as unknown as { executeSql: () => Promise<never> }).executeSql = async () => {
+    (services.statements as unknown as { submit: () => Promise<never> }).submit = async () => {
       throw new Error("[TABLE_OR_VIEW_NOT_FOUND] missing (SQLSTATE 42P01)");
     };
     await client.callTool({ name: "list_objects", arguments: {} });
