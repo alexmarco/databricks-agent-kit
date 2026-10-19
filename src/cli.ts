@@ -7,6 +7,7 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { Command, Option } from "commander";
 import { sleep } from "./abort.ts";
 import { defaultAuthDependencies, resolveAuth } from "./auth.ts";
+import { checkBranchPolicy } from "./branch-policy.ts";
 import { createClient, type ClientDependencies } from "./client.ts";
 import { defaultStorageDir, resolveSettings, type CliFlags, type Settings } from "./config.ts";
 import { DOCTOR_LIMITS, ensureWritableDirectory, formatReport, runDoctor } from "./doctor.ts";
@@ -164,6 +165,16 @@ async function main(argv: string[]): Promise<number | undefined> {
     .addOption(profileOption())
     .action(async (flags: CliFlags) => {
       exitCode = await runDoctorCommand(settingsFrom(flags));
+    });
+  program
+    .command("branch-policy <source> <target>")
+    .description("check that a pull request from <source> may target <target> (used by CI)")
+    .action((source: string, target: string) => {
+      const decision = checkBranchPolicy(source, target);
+      if (!decision.allowed) {
+        process.stderr.write(`dak: ${decision.reason}\n`);
+        exitCode = 1;
+      }
     });
 
   await program.parseAsync(argv, { from: "user" });
