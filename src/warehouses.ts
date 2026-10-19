@@ -19,7 +19,7 @@ export interface WarehouseChosenEvent {
 }
 
 /** Defaults of the warehouse selection. */
-export interface SqlServiceOptions {
+export interface WarehouseSelectionOptions {
   /** Configured warehouse; otherwise a running one, then a serverless one, then the first is used. */
   defaultWarehouseId: string | undefined;
   /** Called once when a warehouse is chosen automatically (none configured, none passed). */
@@ -35,10 +35,11 @@ interface ApiWarehouse {
 }
 
 /**
- * Creates the warehouse selection: explicit, configured or automatic choice (remembered once made) and the listing
- * with the default marked. Statement execution lives in the statement lifecycle module (ADR 0009).
+ * Creates the warehouse selection (ADR 0012): `resolve` gives the explicit, configured or automatic choice (remembered
+ * once made) and `list` gives the accessible warehouses with the default marked. Statement execution lives in the
+ * statement lifecycle module (ADR 0009), which receives `resolve` as an injected function.
  */
-export function createSqlService(client: DatabricksClient, options: SqlServiceOptions) {
+export function createWarehouseSelection(client: DatabricksClient, options: WarehouseSelectionOptions) {
   let automaticWarehouse: string | undefined;
 
   async function fetchWarehouses(): Promise<ApiWarehouse[]> {
@@ -55,7 +56,7 @@ export function createSqlService(client: DatabricksClient, options: SqlServiceOp
     return first === undefined ? undefined : { warehouse: first, reason: "first" };
   }
 
-  async function resolveWarehouse(explicit?: string): Promise<string> {
+  async function resolve(explicit?: string): Promise<string> {
     if (explicit !== undefined) return explicit;
     if (options.defaultWarehouseId !== undefined) return options.defaultWarehouseId;
     if (automaticWarehouse === undefined) {
@@ -75,7 +76,7 @@ export function createSqlService(client: DatabricksClient, options: SqlServiceOp
     return automaticWarehouse;
   }
 
-  async function listWarehouses(): Promise<WarehouseSummary[]> {
+  async function list(): Promise<WarehouseSummary[]> {
     const warehouses = await fetchWarehouses();
     const defaultId = options.defaultWarehouseId ?? chooseWarehouse(warehouses)?.warehouse.id;
     return warehouses.map((warehouse) => ({
@@ -88,8 +89,8 @@ export function createSqlService(client: DatabricksClient, options: SqlServiceOp
     }));
   }
 
-  return { resolveWarehouse, listWarehouses };
+  return { resolve, list };
 }
 
-/** Methods returned by {@link createSqlService}. */
-export type SqlService = ReturnType<typeof createSqlService>;
+/** Methods returned by {@link createWarehouseSelection}. */
+export type WarehouseSelection = ReturnType<typeof createWarehouseSelection>;

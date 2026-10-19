@@ -4,7 +4,7 @@ import type { AuthProvider, FetchLike } from "./auth.ts";
 import type { DatabricksClient } from "./client.ts";
 import type { Settings } from "./config.ts";
 import { messageWithoutUrls } from "./errors.ts";
-import { createSqlService } from "./sql.ts";
+import { createWarehouseSelection } from "./warehouses.ts";
 import type { StatementLifecycle, StatementLifecycleOptions } from "./statements.ts";
 
 /** The part of the statement lifecycle that the doctor uses. */
@@ -107,8 +107,8 @@ async function resultDownloadCheck(deps: DoctorDependencies, statements: DoctorS
 
 async function remoteChecks(deps: DoctorDependencies, auth: AuthProvider): Promise<DoctorCheck[]> {
   const client = deps.createClient(auth);
-  const sql = createSqlService(client, { defaultWarehouseId: deps.settings.warehouseId ?? auth.profileWarehouseId });
-  const statements = deps.createStatements(client, { maxRows: 10, allowWrites: false, maxResultBytes: 10_000, resolveWarehouse: sql.resolveWarehouse });
+  const warehouses = createWarehouseSelection(client, { defaultWarehouseId: deps.settings.warehouseId ?? auth.profileWarehouseId });
+  const statements = deps.createStatements(client, { maxRows: 10, allowWrites: false, maxResultBytes: 10_000, resolveWarehouse: warehouses.resolve });
   const checks: DoctorCheck[] = [];
 
   try {
@@ -120,8 +120,8 @@ async function remoteChecks(deps: DoctorDependencies, auth: AuthProvider): Promi
 
   let warehouseId: string;
   try {
-    warehouseId = await sql.resolveWarehouse();
-    const warehouse = (await sql.listWarehouses()).find((candidate) => candidate.id === warehouseId);
+    warehouseId = await warehouses.resolve();
+    const warehouse = (await warehouses.list()).find((candidate) => candidate.id === warehouseId);
     checks.push({ name: "SQL warehouse", status: "ok", detail: warehouse === undefined ? warehouseId : `${warehouse.id} (${warehouse.name}, ${warehouse.state})` });
   } catch (error) {
     checks.push({ name: "SQL warehouse", status: "fail", detail: messageOf(error), next: "Set DATABRICKS_WAREHOUSE_ID or get CAN USE on a SQL warehouse." });
