@@ -261,6 +261,21 @@ test("an unexpected error fails the execution as an error with its stack trace",
   });
 });
 
+test("a result that cannot be serialized fails the execution instead of being logged as a success", async () => {
+  await withLogs("stdio", async (context) => {
+    const connection = await connect(context);
+    (connection.services.statements as unknown as { submit: () => Promise<unknown> }).submit = async () => ({ ...okResult, rows: [[1n]] });
+    const result = await connection.client.callTool({ name: "execute_sql", arguments: { statement: "SELECT 1" } });
+    assert.equal(result.isError, true);
+    const { execution, logs } = toolLogs(context, "execute_sql");
+    assert.equal(execution.status, "failed");
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0]?.level, "error");
+    assert.equal(logs[0]?.metadata?.statement, "SELECT 1");
+    await closeAll(connection);
+  });
+});
+
 test("log resources read from SQLite, including the latest calls, without opening executions", async () => {
   await withLogs("stdio", async (context) => {
     const connection = await connect(context);

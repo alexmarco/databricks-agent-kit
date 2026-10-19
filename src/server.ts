@@ -78,12 +78,16 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     // The JSON Schema `$schema` URI tells the agent nothing and costs about 60 characters per tool in every session.
     server.registerTool(name, { description, inputSchema: inputSchema.meta({ $schema: undefined }), annotations }, (async (args: z.output<Schema>) => {
       try {
-        const result = await scope.run({ toolName: name }, () => run(args), {
-          message: "Tool call completed",
-          arguments: describeArguments(args as Record<string, unknown>),
-          summarize,
-        });
-        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+        // The reply is serialized inside the scope, so a result that cannot be serialized fails the execution.
+        const reply = await scope.run(
+          { toolName: name },
+          async () => {
+            const result = await run(args);
+            return { result, text: JSON.stringify(result) };
+          },
+          { message: "Tool call completed", arguments: describeArguments(args as Record<string, unknown>), summarize: ({ result }) => summarize(result) },
+        );
+        return { content: [{ type: "text" as const, text: reply.text }] };
       } catch (error) {
         return { isError: true, content: [{ type: "text" as const, text: errorMessage(error) }] };
       }
@@ -99,17 +103,17 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     read: (url: URL, variables: Record<string, string | string[]>) => unknown,
   ) {
     const handler = async (url: URL, variables: Record<string, string | string[]> = {}) => {
-      const reply = (payload: unknown) => ({ contents: [{ uri: url.href, mimeType: "application/json", text: JSON.stringify(payload) }] });
+      const reply = (text: string) => ({ contents: [{ uri: url.href, mimeType: "application/json", text }] });
       if (!record) {
         logs.flush();
         try {
-          return reply(await read(url, variables));
+          return reply(JSON.stringify(await read(url, variables)));
         } catch (error) {
           if (!(error instanceof DakError)) logs.lifecycle.error(error instanceof Error ? error.message : String(error), undefined, error);
           throw error;
         }
       }
-      return reply(await scope.run({ resourceUri: url.href }, async () => read(url, variables)));
+      return reply(await scope.run({ resourceUri: url.href }, async () => JSON.stringify(await read(url, variables))));
     };
     const config = { title: name, description, mimeType: "application/json" };
     if (typeof uri === "string") server.registerResource(name, uri, config, (url) => handler(url));
