@@ -18,6 +18,7 @@
     "build": "tsc -p tsconfig.build.json",
     "format:check": "biome format .",
     "lint": "biome lint .",
+    "prepare": "husky",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\"",
     "test:integration": "node --disable-warning=ExperimentalWarning --test \"test/integration/*.it.ts\""
