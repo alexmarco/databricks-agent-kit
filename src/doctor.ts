@@ -114,12 +114,7 @@ async function resultDownloadCheck(deps: DoctorDependencies, client: DatabricksC
 
 async function remoteChecks(deps: DoctorDependencies, auth: AuthProvider): Promise<DoctorCheck[]> {
   const client = deps.createClient(auth);
-  const sql = createSqlService(client, {
-    maxRows: 10,
-    allowWrites: false,
-    defaultWarehouseId: deps.settings.warehouseId ?? auth.profileWarehouseId,
-    maxResultBytes: 10_000,
-  });
+  const sql = createSqlService(client, { defaultWarehouseId: deps.settings.warehouseId ?? auth.profileWarehouseId });
   const statements = createStatementLifecycle(client, { maxRows: 10, allowWrites: false, maxResultBytes: 10_000, resolveWarehouse: sql.resolveWarehouse });
   const checks: DoctorCheck[] = [];
 

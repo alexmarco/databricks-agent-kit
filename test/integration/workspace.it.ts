@@ -36,7 +36,7 @@ const MULTI_STATEMENT_REJECTIONS = [/PARSE_SYNTAX_ERROR/i, /multiple statements/
 const auth = await resolveAuth({ profile, explicitProfile: true, env: process.env }, defaultAuthDependencies(process.env));
 const clientDependencies: ClientDependencies = { fetch: (input, init) => fetch(input, init), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) };
 const client = createClient(auth, clientDependencies);
-const sql = createSqlService(client, { maxRows: 100, allowWrites: false, defaultWarehouseId: process.env.DATABRICKS_WAREHOUSE_ID ?? auth.profileWarehouseId, maxResultBytes: 100_000 });
+const sql = createSqlService(client, { defaultWarehouseId: process.env.DATABRICKS_WAREHOUSE_ID ?? auth.profileWarehouseId });
 const statementOptions = { maxRows: 100, maxResultBytes: 100_000, resolveWarehouse: sql.resolveWarehouse };
 const statements = createStatementLifecycle(client, { ...statementOptions, allowWrites: false });
 const writableStatements = createStatementLifecycle(client, { ...statementOptions, allowWrites: true });

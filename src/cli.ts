@@ -80,11 +80,7 @@ async function runMcp(settings: Settings): Promise<void> {
       onRequest: (event) => logs.current().debug("Databricks request", { ...event }),
     });
     const sql = createSqlService(client, {
-      maxRows: settings.maxRows,
-      allowWrites: settings.allowWrites,
       defaultWarehouseId: settings.warehouseId ?? auth.profileWarehouseId,
-      maxResultBytes: 100_000,
-      maxExportBytes: settings.exportMaxBytes,
       onWarehouseChosen: (event) => logs.current().info("Warehouse chosen automatically", { ...event }),
     });
     logs.lifecycle.info("Databricks credentials resolved", { host: auth.host, method: auth.method });
