@@ -27,4 +27,6 @@ Terms used in the code and the documents of `databricks-agent-kit`. Design vocab
 | **Server-written SQL**   | SQL that this server composes itself; it skips the read-only policy.                                                                                              |
 | **Poll / wait**          | `get` with `waitSeconds` re-fetches a statement with growing waits (1 s, 2 s, 3 s...) until it is no longer `PENDING` or `RUNNING` or the wait is spent.          |
 | **Result shaping**       | Turning an API statement into a bounded result: columns, rows capped by the row limit and the byte limit, and a `truncated` flag.                                 |
+| **Await export**         | `awaitExport` polls an export statement until it succeeds, with waits growing to 10 s and no upper bound, and describes its result (ADR 0010). Opposite of the bounded `get` wait. |
+| **Chunk link**           | The presigned URL of one result chunk of an export, from `exportChunkLink` or inline with the finished statement. It carries credentials: never logged or returned.   |
 | **Diagnostics**          | `checkMs` and `warehouseId`, filled by the module for the final log entry of a tool call (an out-parameter until the execution scope module replaces it).         |
