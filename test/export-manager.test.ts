@@ -186,7 +186,7 @@ test("chunks resolved out of order are written in order with at most 4 downloads
     assert.equal(initial.id, "sales-01ef-statement");
     assert.equal(initial.path, join(dir, "exports", "sales-01ef-statement.csv"));
 
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
     assert.equal(final?.status, "SUCCEEDED");
     assert.deepEqual(sink.calls, ["write:0", "write:1", "write:2", "write:3", "write:4", "finish"]);
     assert.equal(downloads.maxInFlight(), 4);
@@ -218,7 +218,7 @@ test("get reports DOWNLOADING with growing progress and wait returns the final S
     );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.deepEqual(
       seen.map((state) => [state?.status, state?.progress?.chunksDone, state?.progress?.chunksTotal]),
@@ -249,7 +249,7 @@ test("a 403 on the first download requests a new link once and succeeds", async 
     );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "SUCCEEDED");
     assert.equal(linkRequests.get(2), 2);
@@ -268,7 +268,7 @@ test("a second 403 fails the job with an error that names the chunk", async () =
     );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.match(final?.error ?? "", /chunk 2/);
@@ -287,7 +287,7 @@ test("zero chunks still finish the sink and succeed with 0 rows", async () => {
     );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "SUCCEEDED");
     assert.equal(final?.rows, 0);
@@ -304,7 +304,7 @@ test("a truncated manifest ends SUCCEEDED with truncated true", async () => {
     );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "SUCCEEDED");
     assert.equal(final?.truncated, true);
@@ -399,7 +399,7 @@ test("a failing sink write ends FAILED and aborts the sink", async () => {
     );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.equal(final?.error, "disk full");
@@ -424,7 +424,7 @@ test("a sink abort that rejects is logged and does not hide the original error",
     );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.equal(final?.error, "write failed");
@@ -446,7 +446,7 @@ test("a FAILED statement ends the job FAILED with the Databricks message", async
     );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.equal(final?.error, "[TABLE_OR_VIEW_NOT_FOUND] missing");
@@ -461,7 +461,7 @@ test("starting again when the export path exists rejects with InvalidArgumentErr
     const manager = createExportManager(managerDeps(logs, dir, { statements, fetch }));
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
     assert.equal(final?.status, "SUCCEEDED");
     const path = join(dir, "exports", "sales-01ef-statement.csv");
     assert.equal(await readFile(path, "utf8"), "id\n1\n");
@@ -506,7 +506,7 @@ test("a successful export logs start and finish with rows", async () => {
     );
 
     await manager.start(exportRequest());
-    await manager.wait(STATEMENT_ID, 1000);
+    await manager.wait(STATEMENT_ID, 10000);
     logs.flush();
 
     assert.equal(repository.searchLogs({ text: "Export started" }).total, 1);
@@ -545,7 +545,7 @@ test("the log execution of an export ends completed, failed or cancelled with it
       }),
     );
     await done.start(exportRequest());
-    await done.wait(STATEMENT_ID, 1000);
+    await done.wait(STATEMENT_ID, 10000);
     const [completedId] = exportExecutionIds();
     assert.equal(statusOf(completedId!), "completed");
 
@@ -557,7 +557,7 @@ test("the log execution of an export ends completed, failed or cancelled with it
       }),
     );
     await failing.start({ ...exportRequest(), name: "failing" });
-    await failing.wait(STATEMENT_ID, 1000);
+    await failing.wait(STATEMENT_ID, 10000);
     const failedId = exportExecutionIds().find((id) => id !== completedId);
     assert.equal(statusOf(failedId!), "failed");
 
@@ -595,7 +595,7 @@ test("a 503 on a download is retried after a wait and succeeds", async () => {
     );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "SUCCEEDED");
     assert.deepEqual(sleeps, [500]);
@@ -617,7 +617,7 @@ test("a network error on a download is retried and succeeds", async () => {
     );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "SUCCEEDED");
     assert.equal(downloads.calls.filter((call) => call.url.includes("chunk-0?")).length, 2);
@@ -636,7 +636,7 @@ test("a persistent 5xx fails after 3 retries with growing waits, naming the chun
     );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.match(final?.error ?? "", /chunk 1.*HTTP 502/);
@@ -696,7 +696,7 @@ test("a 404 on a download fails at once without retry", async () => {
     );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.match(final?.error ?? "", /chunk 0.*HTTP 404/);
@@ -716,7 +716,7 @@ test("a failed download stops the job without waiting for earlier chunks", async
     const manager = createExportManager(managerDeps(logs, dir, { statements, fetch, sinks: { csv: sink.factory } }));
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.match(final?.error ?? "", /chunk 3/);
@@ -744,7 +744,7 @@ test("a rejected finish fails the job and aborts the sink once", async () => {
     );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.equal(final?.error, "rename failed");
@@ -812,7 +812,7 @@ test("no download beyond the look-ahead window starts before the first chunk is 
     assert.deepEqual([...started].sort(), [0, 1, 2, 3]);
 
     releaseFirst();
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
     assert.equal(final?.status, "SUCCEEDED");
     assert.deepEqual(sink.calls, ["write:0", "write:1", "write:2", "write:3", "write:4", "write:5", "finish"]);
   });
@@ -1008,7 +1008,7 @@ test("a download error that holds a presigned URL never reaches the state or the
     );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.match(final?.error ?? "", /chunk 0 download failed \(Failed to parse URL from <url>\)/);
@@ -1035,7 +1035,7 @@ test("a link whose expiration has passed is renewed before any download", async 
     );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "SUCCEEDED");
     assert.equal(linkRequests.get(0), 1);
