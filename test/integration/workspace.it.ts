@@ -1,6 +1,7 @@
 /**
  * Integration tests against a real Databricks workspace.
  * Run with: DAK_IT_PROFILE=<profile> npm run test:integration
+ * or with DATABRICKS_HOST, DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET set (takes precedence over the profile).
  * Optional: DAK_IT_TABLE (default samples.nyctaxi.trips), DATABRICKS_WAREHOUSE_ID.
  */
 import { after, afterEach, test } from "node:test";
@@ -18,12 +19,10 @@ import { openLogRepository } from "../../src/logging/repository.ts";
 import { createLogService } from "../../src/logging/service.ts";
 import { createMetadataService } from "../../src/metadata.ts";
 import { createWarehouseSelection } from "../../src/warehouses.ts";
+import { selectIntegrationConnection } from "./connection.ts";
 import { createStatementLifecycle, ReadOnlyViolationError, type StatementResult } from "../../src/statements.ts";
 
-const profile = process.env.DAK_IT_PROFILE;
-if (profile === undefined || profile === "") {
-  throw new Error("Set DAK_IT_PROFILE to the Databricks CLI profile used for integration tests.");
-}
+const connection = selectIntegrationConnection(process.env);
 const table = process.env.DAK_IT_TABLE ?? "samples.nyctaxi.trips";
 /** Target of the write attempts below; it never exists, so even an executed DROP ... IF EXISTS changes nothing. */
 const NEVER_EXISTS = "main.default.dak_it_never_exists";
@@ -32,12 +31,23 @@ const EXPORT_TIMEOUT_MS = 10 * 60_000;
  * Messages showing that Databricks refused several statements in one call while parsing it. Extend the list when a
  * real run shows another wording of the same rejection.
  */
-const MULTI_STATEMENT_REJECTIONS = [/PARSE_SYNTAX_ERROR/i, /multiple statements/i, /MULTI_STATEMENT/i, /extra input/i, /mismatched input/i];
+const MULTI_STATEMENT_REJECTIONS = [
+  /PARSE_SYNTAX_ERROR/i,
+  /multiple statements/i,
+  /MULTI_STATEMENT/i,
+  /extra input/i,
+  /mismatched input/i,
+];
 
-const auth = await resolveAuth({ profile, explicitProfile: true, env: process.env }, defaultAuthDependencies(process.env));
-const clientDependencies: ClientDependencies = { fetch: (input, init) => fetch(input, init), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) };
+const auth = await resolveAuth(connection, defaultAuthDependencies(process.env));
+const clientDependencies: ClientDependencies = {
+  fetch: (input, init) => fetch(input, init),
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+};
 const client = createClient(auth, clientDependencies);
-const warehouseSelection = createWarehouseSelection(client, { defaultWarehouseId: process.env.DATABRICKS_WAREHOUSE_ID ?? auth.profileWarehouseId });
+const warehouseSelection = createWarehouseSelection(client, {
+  defaultWarehouseId: process.env.DATABRICKS_WAREHOUSE_ID ?? auth.profileWarehouseId,
+});
 const statementOptions = { maxRows: 100, maxResultBytes: 100_000, resolveWarehouse: warehouseSelection.resolve };
 const statements = createStatementLifecycle(client, { ...statementOptions, allowWrites: false });
 const writableStatements = createStatementLifecycle(client, { ...statementOptions, allowWrites: true });
@@ -46,9 +56,19 @@ const metadata = createMetadataService(client, statements);
 // Exports are built like `dak mcp` builds them (src/cli.ts), writing to a fresh directory.
 const workDir = await mkdtemp(join(tmpdir(), "dak-it-"));
 const exportDir = join(workDir, "exports");
-const logs = createLogService({ repository: await openLogRepository(join(workDir, "logs.db")), transport: "stdio", level: "info" });
+const logs = createLogService({
+  repository: await openLogRepository(join(workDir, "logs.db")),
+  transport: "stdio",
+  level: "info",
+});
 const scope = createExecutionScope(logs);
-const exports = createExportManager({ statements, fetch: clientDependencies.fetch, dir: exportDir, scope, sleep: clientDependencies.sleep });
+const exports = createExportManager({
+  statements,
+  fetch: clientDependencies.fetch,
+  dir: exportDir,
+  scope,
+  sleep: clientDependencies.sleep,
+});
 
 /** Statements started by the export tests; `afterEach` cancels them in Databricks whatever the outcome of the test. */
 const startedStatements = new Set<string>();
@@ -112,7 +132,10 @@ test("searches metadata through information_schema", async () => {
 
 test("lineage returns data or an explicit note when unavailable", async () => {
   const description = await metadata.describeTable(table, { lineage: true });
-  assert.ok(description.lineage !== undefined || (description.notes ?? []).some((note) => /lineage/i.test(note)), "lineage or a note about it");
+  assert.ok(
+    description.lineage !== undefined || (description.notes ?? []).some((note) => /lineage/i.test(note)),
+    "lineage or a note about it",
+  );
 });
 
 test("the read-only guard blocks writes before reaching the workspace", async () => {
@@ -120,14 +143,22 @@ test("the read-only guard blocks writes before reaching the workspace", async ()
 });
 
 test("queries in every read-only form pass DESCRIBE QUERY and run", async () => {
-  const queries = [`TABLE ${table}`, "VALUES (1)", `FROM ${table} SELECT *`, "WITH t AS (SELECT 1) SELECT * FROM t", "(SELECT 1)"];
+  const queries = [
+    `TABLE ${table}`,
+    "VALUES (1)",
+    `FROM ${table} SELECT *`,
+    "WITH t AS (SELECT 1) SELECT * FROM t",
+    "(SELECT 1)",
+  ];
   for (const statement of queries) {
     try {
       const result = await statements.submit({ statement, rowLimit: 1 });
       if (result.state === "PENDING" || result.state === "RUNNING") await statements.cancel(result.statementId);
     } catch (error) {
       if (error instanceof ReadOnlyViolationError) {
-        assert.fail(`The read-only check rejected the query \`${statement}\`; report it to the maintainer (do not widen the accepted prefixes without them): ${error.message}`);
+        assert.fail(
+          `The read-only check rejected the query \`${statement}\`; report it to the maintainer (do not widen the accepted prefixes without them): ${error.message}`,
+        );
       }
       throw error;
     }
@@ -168,7 +199,8 @@ test("read-only bypass attempts are rejected", async () => {
 
 test("Databricks rejects several statements in one call even with writes enabled", async () => {
   const statement = `SHOW CATALOGS; DROP TABLE IF EXISTS ${NEVER_EXISTS}`;
-  const adr = "ADR 0008 and the read-only design assume the Statement Execution API rejects several statements in one call; stop and report it to the maintainer.";
+  const adr =
+    "ADR 0008 and the read-only design assume the Statement Execution API rejects several statements in one call; stop and report it to the maintainer.";
   let result: StatementResult;
   try {
     result = await writableStatements.submit({ statement });
@@ -182,12 +214,16 @@ test("Databricks rejects several statements in one call even with writes enabled
   }
   if (result.state === "PENDING" || result.state === "RUNNING") {
     await writableStatements.cancel(result.statementId).catch(() => undefined);
-    assert.fail(`Databricks accepted several statements in one call and was still running them (${result.state}; cancelled now). ${adr}`);
+    assert.fail(
+      `Databricks accepted several statements in one call and was still running them (${result.state}; cancelled now). ${adr}`,
+    );
   }
   assert.fail(`Databricks accepted several statements in one call (${JSON.stringify(result)}). ${adr}`);
 });
 
-test("a multi-chunk CSV export has one header line and every row", { timeout: EXPORT_TIMEOUT_MS + 60_000 }, async () => {
+test("a multi-chunk CSV export has one header line and every row", {
+  timeout: EXPORT_TIMEOUT_MS + 60_000,
+}, async () => {
   const state = await runExport("SELECT id FROM range(600000)", "csv", "it-csv");
   assert.equal(state.status, "SUCCEEDED", `export ended with: ${state.error}`);
   const [file] = state.files ?? [];
@@ -198,8 +234,14 @@ test("a multi-chunk CSV export has one header line and every row", { timeout: EX
   assert.equal(lines.filter((line) => line === "id").length, 1, "only the first chunk carries the header");
 });
 
-test("a Parquet export keeps NULL, DATE, BINARY and MAP columns in valid files", { timeout: EXPORT_TIMEOUT_MS + 60_000 }, async () => {
-  const state = await runExport("SELECT CAST(NULL AS STRING) a, DATE'2026-01-01' b, X'CAFE' c, map('k', 1) d", "parquet", "it-parquet");
+test("a Parquet export keeps NULL, DATE, BINARY and MAP columns in valid files", {
+  timeout: EXPORT_TIMEOUT_MS + 60_000,
+}, async () => {
+  const state = await runExport(
+    "SELECT CAST(NULL AS STRING) a, DATE'2026-01-01' b, X'CAFE' c, map('k', 1) d",
+    "parquet",
+    "it-parquet",
+  );
   assert.equal(state.status, "SUCCEEDED", `export ended with: ${state.error}`);
   assert.ok((state.files ?? []).length > 0);
   for (const file of state.files ?? []) {
@@ -212,7 +254,9 @@ test("a Parquet export keeps NULL, DATE, BINARY and MAP columns in valid files",
 test("a SQLite export holds every row of the manifest", { timeout: EXPORT_TIMEOUT_MS + 60_000 }, async () => {
   const state = await runExport("SELECT id, CAST(id AS STRING) AS s FROM range(1000)", "sqlite", "it-sqlite");
   assert.equal(state.status, "SUCCEEDED", `export ended with: ${state.error}`);
-  const statement = await client.get<{ manifest?: { total_row_count?: number } }>(`/api/2.0/sql/statements/${state.statementId}`);
+  const statement = await client.get<{ manifest?: { total_row_count?: number } }>(
+    `/api/2.0/sql/statements/${state.statementId}`,
+  );
   const [file] = state.files ?? [];
   assert.ok(file !== undefined);
   const database = new DatabaseSync(file, { readOnly: true });
@@ -224,10 +268,14 @@ test("a SQLite export holds every row of the manifest", { timeout: EXPORT_TIMEOU
   }
 });
 
-test("two exports with the same name started back to back get distinct ids", { timeout: EXPORT_TIMEOUT_MS + 60_000 }, async () => {
+test("two exports with the same name started back to back get distinct ids", {
+  timeout: EXPORT_TIMEOUT_MS + 60_000,
+}, async () => {
   const first = await startExport("SELECT 1 AS x", "csv", "it-twice");
   const second = await startExport("SELECT 2 AS x", "csv", "it-twice").catch((error: unknown) => {
-    assert.fail(`The second export collided with ${first.id} (the export id must hold the full statement id): ${(error as Error).message}`);
+    assert.fail(
+      `The second export collided with ${first.id} (the export id must hold the full statement id): ${(error as Error).message}`,
+    );
   });
   assert.notEqual(second.id, first.id);
   assert.notEqual(second.path, first.path);

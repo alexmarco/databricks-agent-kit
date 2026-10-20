@@ -18,7 +18,11 @@ function recorded(context: Context, toolName: string) {
 }
 
 const tick = (ms = 1) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-const entry = { message: "Tool call completed", arguments: { statement: "SELECT 1" }, summarize: (result: { state: string; rows: number }) => ({ state: result.state, rowCount: result.rows }) };
+const entry = {
+  message: "Tool call completed",
+  arguments: { statement: "SELECT 1" },
+  summarize: (result: { state: string; rows: number }) => ({ state: result.state, rowCount: result.rows }),
+};
 
 test("a successful run writes exactly one info entry with arguments, duration and result summary, and completes the execution", async () => {
   await withLogs("stdio", async (context) => {
@@ -43,7 +47,9 @@ test("a run without an entry writes nothing on success and completes the executi
     const scope = createExecutionScope(context.logs);
     await scope.run({ resourceUri: "resource://x" }, async () => "payload");
     context.logs.flush();
-    const execution = context.repository.recentExecutions(50).find((candidate) => candidate.resourceUri === "resource://x");
+    const execution = context.repository
+      .recentExecutions(50)
+      .find((candidate) => candidate.resourceUri === "resource://x");
     assert.equal(execution?.status, "completed");
     assert.deepEqual(context.repository.executionDetail(execution!.executionId)?.logs, []);
   });
@@ -53,7 +59,10 @@ test("an expected error is one warn entry without stack trace, carries arguments
   await withLogs("stdio", async (context) => {
     const scope = createExecutionScope(context.logs);
     const failure = new InvalidArgumentError("bad input");
-    await assert.rejects(scope.run({ toolName: "t" }, async () => Promise.reject(failure), entry), (error: unknown) => error === failure);
+    await assert.rejects(
+      scope.run({ toolName: "t" }, async () => Promise.reject(failure), entry),
+      (error: unknown) => error === failure,
+    );
     const { execution, entries } = recorded(context, "t");
     assert.equal(execution.status, "failed");
     assert.equal(entries.length, 1);
@@ -69,7 +78,10 @@ test("an expected error is one warn entry without stack trace, carries arguments
 test("an unexpected error is one error entry with its stack trace and fails the execution", async () => {
   await withLogs("stdio", async (context) => {
     const scope = createExecutionScope(context.logs);
-    await assert.rejects(scope.run({ toolName: "t" }, async () => Promise.reject(new Error("driver crashed")), entry), /driver crashed/);
+    await assert.rejects(
+      scope.run({ toolName: "t" }, async () => Promise.reject(new Error("driver crashed")), entry),
+      /driver crashed/,
+    );
     const { execution, entries } = recorded(context, "t");
     assert.equal(execution.status, "failed");
     assert.equal(entries.length, 1);
@@ -82,7 +94,10 @@ test("an unexpected error is one error entry with its stack trace and fails the 
 test("a failure of a run without an entry is one entry without metadata", async () => {
   await withLogs("stdio", async (context) => {
     const scope = createExecutionScope(context.logs);
-    await assert.rejects(scope.run({ toolName: "t" }, async () => Promise.reject(new InvalidArgumentError("nope"))), /nope/);
+    await assert.rejects(
+      scope.run({ toolName: "t" }, async () => Promise.reject(new InvalidArgumentError("nope"))),
+      /nope/,
+    );
     const { entries } = recorded(context, "t");
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.level, "warn");
@@ -93,7 +108,10 @@ test("a failure of a run without an entry is one entry without metadata", async 
 test("ExecutionCancelled cancels the execution without an entry and is rethrown", async () => {
   await withLogs("stdio", async (context) => {
     const scope = createExecutionScope(context.logs);
-    await assert.rejects(scope.run({ toolName: "t" }, async () => Promise.reject(new ExecutionCancelled()), entry), ExecutionCancelled);
+    await assert.rejects(
+      scope.run({ toolName: "t" }, async () => Promise.reject(new ExecutionCancelled()), entry),
+      ExecutionCancelled,
+    );
     const { execution, entries } = recorded(context, "t");
     assert.equal(execution.status, "cancelled");
     assert.deepEqual(entries, []);
@@ -146,7 +164,11 @@ test("concurrent runs keep their diagnostics and entries apart", async () => {
         entry,
       );
     await Promise.all([call("slow", 1, 15), call("fast", 2, 1), call("middle", 3, 7)]);
-    for (const [toolName, checkMs] of [["slow", 1], ["fast", 2], ["middle", 3]] as const) {
+    for (const [toolName, checkMs] of [
+      ["slow", 1],
+      ["fast", 2],
+      ["middle", 3],
+    ] as const) {
       const { entries } = recorded(context, toolName);
       assert.equal(entries.length, 1);
       assert.equal(entries[0]?.metadata?.checkMs, checkMs);
@@ -175,7 +197,10 @@ test("the work gets its own execution and is the current one while it runs", asy
     });
     assert.equal(context.logs.current(), context.logs.lifecycle);
     const { entries } = recorded(context, "t");
-    assert.deepEqual(entries.map((logged) => logged.message), ["inside the work"]);
+    assert.deepEqual(
+      entries.map((logged) => logged.message),
+      ["inside the work"],
+    );
   });
 });
 

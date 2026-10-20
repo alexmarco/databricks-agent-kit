@@ -85,9 +85,15 @@ test("resolveSettings: environment profile is not explicit", () => {
 });
 
 test("defaultStorageDir is a per-user state directory", () => {
-  assert.equal(defaultStorageDir({ LOCALAPPDATA: "C:/Users/u/AppData/Local" }, "win32", "C:/Users/u"), join("C:/Users/u/AppData/Local", "databricks-agent-kit"));
+  assert.equal(
+    defaultStorageDir({ LOCALAPPDATA: "C:/Users/u/AppData/Local" }, "win32", "C:/Users/u"),
+    join("C:/Users/u/AppData/Local", "databricks-agent-kit"),
+  );
   assert.equal(defaultStorageDir({}, "linux", "/home/u"), join("/home/u", ".local", "state", "databricks-agent-kit"));
-  assert.equal(defaultStorageDir({ XDG_STATE_HOME: "/xdg" }, "darwin", "/Users/u"), join("/xdg", "databricks-agent-kit"));
+  assert.equal(
+    defaultStorageDir({ XDG_STATE_HOME: "/xdg" }, "darwin", "/Users/u"),
+    join("/xdg", "databricks-agent-kit"),
+  );
 });
 
 test("resolveSettings rejects invalid values", () => {

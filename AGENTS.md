@@ -25,7 +25,7 @@ npm run build
 DAK_IT_PROFILE=<profile> npm run test:integration   # real workspace, opt-in
 ```
 
-Node.js 22.13 or later is required.
+Node.js 22.18 or later is required (type stripping is unflagged from that version).
 
 ## Working rules
 

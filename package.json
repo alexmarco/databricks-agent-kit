@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "MCP server that gives coding agents governed SQL and Unity Catalog metadata access to Databricks.",
   "type": "module",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "private": true,
   "bin": {
     "dak": "dist/cli.js"
@@ -12,12 +12,16 @@
     "dist"
   ],
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.18"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "prepare": "husky",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\"",
+    "test:coverage": "node --disable-warning=ExperimentalWarning --test --experimental-test-coverage --test-coverage-lines=95 --test-coverage-branches=85 --test-coverage-functions=90 \"test/**/*.test.ts\"",
     "test:integration": "node --disable-warning=ExperimentalWarning --test \"test/integration/*.it.ts\""
   },
   "dependencies": {
@@ -28,8 +32,12 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@commitlint/cli": "21.2.4",
+    "@commitlint/config-conventional": "21.2.4",
     "@modelcontextprotocol/client": "^2.3.1",
     "@types/node": "^26.6.5",
+    "husky": "9.1.7",
     "typescript": "^7.0.2"
   }
 }

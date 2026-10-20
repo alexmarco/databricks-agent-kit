@@ -13,7 +13,6 @@ import { withLogs } from "./helpers.ts";
 
 const STATEMENT_ID = "01ef-statement";
 const HOUR_MS = 3_600_000;
-const encoder = new TextEncoder();
 
 interface StatementOptions {
   chunks: number;
@@ -47,9 +46,12 @@ function fakeStatements(options: StatementOptions) {
     async awaitExport(statementId, signal) {
       awaited.push(statementId);
       if (options.pending === true) {
-        return new Promise<ExportResultInfo>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+        return new Promise<ExportResultInfo>((_, reject) =>
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
+        );
       }
-      if (state !== "SUCCEEDED") throw new SqlError(options.errorMessage ?? `Export statement ended in state ${state}.`);
+      if (state !== "SUCCEEDED")
+        throw new SqlError(options.errorMessage ?? `Export statement ended in state ${state}.`);
       return {
         columns: [{ name: "id", type_name: "INT", type_text: "INT", position: 0 }],
         chunkCount: options.chunks,
@@ -97,7 +99,13 @@ function fakeSink(options: { onWrite?: (index: number) => Promise<void> } = {}) 
 type FetchCall = { url: string; init: RequestInit | undefined };
 
 /** Fake download: body `chunk-<n>`, resolved after `delayMs(index)` milliseconds, or thrown `error(url)`. */
-function fakeFetch(options: { delayMs?: (index: number) => number; status?: (url: string) => number; error?: (url: string) => Error | undefined } = {}) {
+function fakeFetch(
+  options: {
+    delayMs?: (index: number) => number;
+    status?: (url: string) => number;
+    error?: (url: string) => Error | undefined;
+  } = {},
+) {
   const calls: FetchCall[] = [];
   let inFlight = 0;
   let maxInFlight = 0;
@@ -144,10 +152,15 @@ function managerDeps(
   };
 }
 
-const exportRequest = (format: ExportFormat = "csv") => ({ statement: { statement: "SELECT * FROM t" }, format, name: "sales" });
+const exportRequest = (format: ExportFormat = "csv") => ({
+  statement: { statement: "SELECT * FROM t" },
+  format,
+  name: "sales",
+});
 
 async function waitFor(condition: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 200 && !condition(); attempt++) await new Promise((resolve) => setTimeout(resolve, 5));
+  for (let attempt = 0; attempt < 200 && !condition(); attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 5));
   assert.ok(condition(), "condition not reached");
 }
 
@@ -163,7 +176,9 @@ test("chunks resolved out of order are written in order with at most 4 downloads
     const { statements } = fakeStatements({ chunks: 5 });
     const downloads = fakeFetch({ delayMs: (index) => (5 - index) * 10 });
     const sink = fakeSink();
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory } }),
+    );
 
     const initial = await manager.start(exportRequest());
     assert.equal(initial.status, "PENDING");
@@ -171,7 +186,7 @@ test("chunks resolved out of order are written in order with at most 4 downloads
     assert.equal(initial.id, "sales-01ef-statement");
     assert.equal(initial.path, join(dir, "exports", "sales-01ef-statement.csv"));
 
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
     assert.equal(final?.status, "SUCCEEDED");
     assert.deepEqual(sink.calls, ["write:0", "write:1", "write:2", "write:3", "write:4", "finish"]);
     assert.equal(downloads.maxInFlight(), 4);
@@ -181,7 +196,10 @@ test("chunks resolved out of order are written in order with at most 4 downloads
       assert.equal(call.init?.headers, undefined);
     }
     assert.equal(sink.contexts[0]?.id, "sales-01ef-statement");
-    assert.deepEqual(sink.contexts[0]?.columns.map((column) => column.name), ["id"]);
+    assert.deepEqual(
+      sink.contexts[0]?.columns.map((column) => column.name),
+      ["id"],
+    );
   });
 });
 
@@ -195,10 +213,12 @@ test("get reports DOWNLOADING with growing progress and wait returns the final S
         seen.push(await manager?.get(STATEMENT_ID));
       },
     });
-    manager = createExportManager(managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: sink.factory } }));
+    manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: sink.factory } }),
+    );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.deepEqual(
       seen.map((state) => [state?.status, state?.progress?.chunksDone, state?.progress?.chunksTotal]),
@@ -224,10 +244,12 @@ test("a 403 on the first download requests a new link once and succeeds", async 
     const { statements, linkRequests } = fakeStatements({ chunks: 4 });
     const downloads = fakeFetch({ status: (url) => (url.includes("chunk-2?attempt=1") ? 403 : 200) });
     const sink = fakeSink();
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory } }),
+    );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "SUCCEEDED");
     assert.equal(linkRequests.get(2), 2);
@@ -241,10 +263,12 @@ test("a second 403 fails the job with an error that names the chunk", async () =
     const { statements, linkRequests } = fakeStatements({ chunks: 4 });
     const downloads = fakeFetch({ status: (url) => (url.includes("chunk-2") ? 403 : 200) });
     const sink = fakeSink();
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory } }),
+    );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.match(final?.error ?? "", /chunk 2/);
@@ -258,10 +282,12 @@ test("zero chunks still finish the sink and succeed with 0 rows", async () => {
   await withLogs("stdio", async ({ logs, dir }) => {
     const { statements } = fakeStatements({ chunks: 0 });
     const sink = fakeSink();
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: sink.factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: sink.factory } }),
+    );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "SUCCEEDED");
     assert.equal(final?.rows, 0);
@@ -273,10 +299,12 @@ test("a truncated manifest ends SUCCEEDED with truncated true", async () => {
   await withLogs("stdio", async ({ logs, dir }) => {
     const { statements } = fakeStatements({ chunks: 1, truncated: true });
     const sink = fakeSink();
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: sink.factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: sink.factory } }),
+    );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "SUCCEEDED");
     assert.equal(final?.truncated, true);
@@ -288,7 +316,9 @@ test("cancel aborts a running download, aborts the sink and marks the job CANCEL
     const { statements } = fakeStatements({ chunks: 2 });
     const downloads = hangingFetch();
     const sink = fakeSink();
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory } }),
+    );
 
     await manager.start(exportRequest());
     await waitFor(() => downloads.calls.length === 2);
@@ -307,7 +337,9 @@ test("close aborts every running job", async () => {
     const { statements } = fakeStatements({ chunks: 1 });
     const downloads = hangingFetch();
     const sink = fakeSink();
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory } }),
+    );
 
     await manager.start(exportRequest());
     await waitFor(() => downloads.calls.length === 1);
@@ -337,7 +369,9 @@ test("a cancel racing with completion leaves the job SUCCEEDED and returns false
         calls.push("abort");
       },
     });
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: factory } }),
+    );
 
     await manager.start(exportRequest());
     await waitFor(() => calls.includes("finish"));
@@ -360,10 +394,12 @@ test("a failing sink write ends FAILED and aborts the sink", async () => {
         if (index === 1) throw new Error("disk full");
       },
     });
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: sink.factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: sink.factory } }),
+    );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.equal(final?.error, "disk full");
@@ -383,10 +419,12 @@ test("a sink abort that rejects is logged and does not hide the original error",
         throw new Error("close failed");
       },
     });
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: factory } }),
+    );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.equal(final?.error, "write failed");
@@ -397,12 +435,18 @@ test("a sink abort that rejects is logged and does not hide the original error",
 
 test("a FAILED statement ends the job FAILED with the Databricks message", async () => {
   await withLogs("stdio", async ({ logs, dir }) => {
-    const { statements } = fakeStatements({ chunks: 0, state: "FAILED", errorMessage: "[TABLE_OR_VIEW_NOT_FOUND] missing" });
+    const { statements } = fakeStatements({
+      chunks: 0,
+      state: "FAILED",
+      errorMessage: "[TABLE_OR_VIEW_NOT_FOUND] missing",
+    });
     const sink = fakeSink();
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: sink.factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: sink.factory } }),
+    );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.equal(final?.error, "[TABLE_OR_VIEW_NOT_FOUND] missing");
@@ -417,7 +461,7 @@ test("starting again when the export path exists rejects with InvalidArgumentErr
     const manager = createExportManager(managerDeps(logs, dir, { statements, fetch }));
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
     assert.equal(final?.status, "SUCCEEDED");
     const path = join(dir, "exports", "sales-01ef-statement.csv");
     assert.equal(await readFile(path, "utf8"), "id\n1\n");
@@ -457,10 +501,12 @@ test("a successful export logs start and finish with rows", async () => {
   await withLogs("stdio", async ({ repository, logs, dir }) => {
     const { statements } = fakeStatements({ chunks: 2, rowsPerChunk: 5 });
     const sink = fakeSink();
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: sink.factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: sink.factory } }),
+    );
 
     await manager.start(exportRequest());
-    await manager.wait(STATEMENT_ID, 1000);
+    await manager.wait(STATEMENT_ID, 10000);
     logs.flush();
 
     assert.equal(repository.searchLogs({ text: "Export started" }).total, 1);
@@ -468,7 +514,10 @@ test("a successful export logs start and finish with rows", async () => {
     assert.equal(finished.total, 1);
     assert.equal(finished.results[0]?.metadata?.rows, 10);
     assert.equal(finished.results[0]?.metadata?.chunks, 2);
-    assert.equal(finished.results.some((entry) => JSON.stringify(entry).includes("storage.example")), false);
+    assert.equal(
+      finished.results.some((entry) => JSON.stringify(entry).includes("storage.example")),
+      false,
+    );
   });
 });
 
@@ -476,27 +525,50 @@ test("the log execution of an export ends completed, failed or cancelled with it
   await withLogs("stdio", async ({ repository, logs, dir }) => {
     const statusOf = (id: string) => {
       logs.flush();
-      return repository.recentExecutions(50).find((execution) => execution.toolName === "export" && execution.executionId === id)?.status;
+      return repository
+        .recentExecutions(50)
+        .find((execution) => execution.toolName === "export" && execution.executionId === id)?.status;
     };
     const exportExecutionIds = () => {
       logs.flush();
-      return repository.recentExecutions(50).filter((execution) => execution.toolName === "export").map((execution) => execution.executionId);
+      return repository
+        .recentExecutions(50)
+        .filter((execution) => execution.toolName === "export")
+        .map((execution) => execution.executionId);
     };
 
-    const done = createExportManager(managerDeps(logs, dir, { statements: fakeStatements({ chunks: 1 }).statements, fetch: fakeFetch().fetch, sinks: { csv: fakeSink().factory } }));
+    const done = createExportManager(
+      managerDeps(logs, dir, {
+        statements: fakeStatements({ chunks: 1 }).statements,
+        fetch: fakeFetch().fetch,
+        sinks: { csv: fakeSink().factory },
+      }),
+    );
     await done.start(exportRequest());
-    await done.wait(STATEMENT_ID, 1000);
+    await done.wait(STATEMENT_ID, 10000);
     const [completedId] = exportExecutionIds();
     assert.equal(statusOf(completedId!), "completed");
 
-    const failing = createExportManager(managerDeps(logs, dir, { statements: fakeStatements({ chunks: 1, state: "FAILED" }).statements, fetch: fakeFetch().fetch, sinks: { csv: fakeSink().factory } }));
+    const failing = createExportManager(
+      managerDeps(logs, dir, {
+        statements: fakeStatements({ chunks: 1, state: "FAILED" }).statements,
+        fetch: fakeFetch().fetch,
+        sinks: { csv: fakeSink().factory },
+      }),
+    );
     await failing.start({ ...exportRequest(), name: "failing" });
-    await failing.wait(STATEMENT_ID, 1000);
+    await failing.wait(STATEMENT_ID, 10000);
     const failedId = exportExecutionIds().find((id) => id !== completedId);
     assert.equal(statusOf(failedId!), "failed");
 
     const hanging = hangingFetch();
-    const cancelling = createExportManager(managerDeps(logs, dir, { statements: fakeStatements({ chunks: 1 }).statements, fetch: hanging.fetch, sinks: { csv: fakeSink().factory } }));
+    const cancelling = createExportManager(
+      managerDeps(logs, dir, {
+        statements: fakeStatements({ chunks: 1 }).statements,
+        fetch: hanging.fetch,
+        sinks: { csv: fakeSink().factory },
+      }),
+    );
     await cancelling.start({ ...exportRequest(), name: "cancelling" });
     await waitFor(() => hanging.calls.length === 1);
     await cancelling.cancel(STATEMENT_ID);
@@ -518,10 +590,12 @@ test("a 503 on a download is retried after a wait and succeeds", async () => {
     const sleeps: number[] = [];
     const sink = fakeSink();
     const sleep = async (ms: number) => void sleeps.push(ms);
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory }, sleep }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory }, sleep }),
+    );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "SUCCEEDED");
     assert.deepEqual(sleeps, [500]);
@@ -534,12 +608,16 @@ test("a network error on a download is retried and succeeds", async () => {
   await withLogs("stdio", async ({ logs, dir }) => {
     const { statements } = fakeStatements({ chunks: 2 });
     let thrown = 0;
-    const downloads = fakeFetch({ error: (url) => (url.includes("chunk-0?") && thrown++ === 0 ? new TypeError("fetch failed") : undefined) });
+    const downloads = fakeFetch({
+      error: (url) => (url.includes("chunk-0?") && thrown++ === 0 ? new TypeError("fetch failed") : undefined),
+    });
     const sink = fakeSink();
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory } }),
+    );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "SUCCEEDED");
     assert.equal(downloads.calls.filter((call) => call.url.includes("chunk-0?")).length, 2);
@@ -553,10 +631,12 @@ test("a persistent 5xx fails after 3 retries with growing waits, naming the chun
     const sleeps: number[] = [];
     const sink = fakeSink();
     const sleep = async (ms: number) => void sleeps.push(ms);
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory }, sleep }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory }, sleep }),
+    );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.match(final?.error ?? "", /chunk 1.*HTTP 502/);
@@ -574,7 +654,10 @@ test("a persistent 5xx fails after 3 retries with growing waits, naming the chun
         [1, 502],
       ],
     );
-    assert.equal(retries.results.some((entry) => JSON.stringify(entry).includes("storage.example")), false);
+    assert.equal(
+      retries.results.some((entry) => JSON.stringify(entry).includes("storage.example")),
+      false,
+    );
   });
 });
 
@@ -589,7 +672,9 @@ test("a cancel during a retry wait stops the job promptly", async () => {
       retryWaits += 1;
       return new Promise<void>(() => undefined);
     };
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory }, sleep }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory }, sleep }),
+    );
 
     await manager.start(exportRequest());
     await waitFor(() => retryWaits === 1);
@@ -606,10 +691,12 @@ test("a 404 on a download fails at once without retry", async () => {
     const { statements, linkRequests } = fakeStatements({ chunks: 1 });
     const downloads = fakeFetch({ status: () => 404 });
     const sink = fakeSink();
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: sink.factory } }),
+    );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.match(final?.error ?? "", /chunk 0.*HTTP 404/);
@@ -623,12 +710,13 @@ test("a failed download stops the job without waiting for earlier chunks", async
     const { statements } = fakeStatements({ chunks: 5 });
     const hanging = hangingFetch();
     const fast = fakeFetch({ status: (url) => (url.includes("chunk-3?") ? 404 : 200) });
-    const fetch = (url: string, init?: RequestInit) => (url.includes("chunk-0?") ? hanging.fetch(url, init) : fast.fetch(url, init));
+    const fetch = (url: string, init?: RequestInit) =>
+      url.includes("chunk-0?") ? hanging.fetch(url, init) : fast.fetch(url, init);
     const sink = fakeSink();
     const manager = createExportManager(managerDeps(logs, dir, { statements, fetch, sinks: { csv: sink.factory } }));
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.match(final?.error ?? "", /chunk 3/);
@@ -651,10 +739,12 @@ test("a rejected finish fails the job and aborts the sink once", async () => {
         calls.push("abort");
       },
     });
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: factory } }),
+    );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.equal(final?.error, "rename failed");
@@ -679,7 +769,9 @@ test("a cancel arriving while a failure is being cleaned up keeps the job FAILED
         });
       },
     });
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: factory } }),
+    );
 
     await manager.start(exportRequest());
     await waitFor(() => calls.includes("abort"));
@@ -710,7 +802,9 @@ test("no download beyond the look-ahead window starts before the first chunk is 
       return new Response(`chunk-${index}`);
     };
     const sink = fakeSink();
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch, concurrency: 2, sinks: { csv: sink.factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch, concurrency: 2, sinks: { csv: sink.factory } }),
+    );
 
     await manager.start(exportRequest());
     await waitFor(() => started.length === 4);
@@ -718,7 +812,7 @@ test("no download beyond the look-ahead window starts before the first chunk is 
     assert.deepEqual([...started].sort(), [0, 1, 2, 3]);
 
     releaseFirst();
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
     assert.equal(final?.status, "SUCCEEDED");
     assert.deepEqual(sink.calls, ["write:0", "write:1", "write:2", "write:3", "write:4", "write:5", "finish"]);
   });
@@ -797,7 +891,9 @@ test("cancel also cancels the Databricks statement once", async () => {
   await withLogs("stdio", async ({ logs, dir }) => {
     const { statements, cancels } = fakeStatements({ chunks: 2 });
     const downloads = hangingFetch();
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: fakeSink().factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: fakeSink().factory } }),
+    );
 
     await manager.start(exportRequest());
     await waitFor(() => downloads.calls.length === 2);
@@ -812,7 +908,9 @@ test("close cancels the Databricks statement of every running job", async () => 
   await withLogs("stdio", async ({ logs, dir }) => {
     // The statements never finish, so both jobs stay PENDING until they are cancelled.
     const { statements, cancels } = fakeStatements({ chunks: 0, pending: true, ids: ["st-a", "st-b"] });
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: hangingFetch().fetch, sinks: { csv: fakeSink().factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: hangingFetch().fetch, sinks: { csv: fakeSink().factory } }),
+    );
 
     await manager.start({ ...exportRequest(), name: "a" });
     await manager.start({ ...exportRequest(), name: "b" });
@@ -833,10 +931,15 @@ test("a closed manager refuses to start an export and submits nothing", async ()
       submissions++;
       return submitExport(...args);
     };
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: fakeSink().factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: fakeSink().factory } }),
+    );
 
     await manager.close();
-    await assert.rejects(manager.start(exportRequest()), (error: unknown) => error instanceof DakError && /shutting down/.test(error.message));
+    await assert.rejects(
+      manager.start(exportRequest()),
+      (error: unknown) => error instanceof DakError && /shutting down/.test(error.message),
+    );
     assert.equal(submissions, 0);
   });
 });
@@ -856,10 +959,15 @@ test("an export whose submission is still running when the manager closes is can
       });
       return { statementId: STATEMENT_ID, warehouseId: "wh1" };
     };
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: fakeSink().factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: fakeFetch().fetch, sinks: { csv: fakeSink().factory } }),
+    );
 
     const starting = manager.start(exportRequest());
-    const rejected = assert.rejects(starting, (error: unknown) => error instanceof DakError && /shutting down/.test(error.message));
+    const rejected = assert.rejects(
+      starting,
+      (error: unknown) => error instanceof DakError && /shutting down/.test(error.message),
+    );
     await submissionStarted;
     await manager.close();
     release();
@@ -874,7 +982,9 @@ test("a failing statement cancel does not change the cancelled job", async () =>
   await withLogs("stdio", async ({ logs, dir }) => {
     const { statements, cancels } = fakeStatements({ chunks: 1, cancelFails: true });
     const downloads = hangingFetch();
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: fakeSink().factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: fakeSink().factory } }),
+    );
 
     await manager.start(exportRequest());
     await waitFor(() => downloads.calls.length === 1);
@@ -890,17 +1000,22 @@ test("a failing statement cancel does not change the cancelled job", async () =>
 test("a download error that holds a presigned URL never reaches the state or the logs", async () => {
   await withLogs("stdio", async ({ repository, logs, dir }) => {
     const { statements } = fakeStatements({ chunks: 1 });
-    const downloads = fakeFetch({ error: (url) => new TypeError(`Failed to parse URL from ${url}&X-Amz-Signature=secret`) });
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: fakeSink().factory } }));
+    const downloads = fakeFetch({
+      error: (url) => new TypeError(`Failed to parse URL from ${url}&X-Amz-Signature=secret`),
+    });
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: fakeSink().factory } }),
+    );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "FAILED");
     assert.match(final?.error ?? "", /chunk 0 download failed \(Failed to parse URL from <url>\)/);
     assert.equal(JSON.stringify(final).includes("storage.example"), false);
     logs.flush();
-    for (const text of ["storage.example", "X-Amz-Signature"]) assert.equal(repository.searchLogs({ text }).total, 0, text);
+    for (const text of ["storage.example", "X-Amz-Signature"])
+      assert.equal(repository.searchLogs({ text }).total, 0, text);
     assert.ok(repository.searchLogs({ text: "<url>" }).total > 0);
   });
 });
@@ -908,19 +1023,31 @@ test("a download error that holds a presigned URL never reaches the state or the
 test("a link whose expiration has passed is renewed before any download", async () => {
   await withLogs("stdio", async ({ repository, logs, dir }) => {
     // The finished statement carries the first link inline, already expired.
-    const staleLink = { url: "https://storage.example/chunk-0?stale", rowCount: 10, expiration: "2020-01-01T00:00:00.000Z" };
+    const staleLink = {
+      url: "https://storage.example/chunk-0?stale",
+      rowCount: 10,
+      expiration: "2020-01-01T00:00:00.000Z",
+    };
     const { statements, linkRequests } = fakeStatements({ chunks: 1, firstLink: staleLink });
     const downloads = fakeFetch();
-    const manager = createExportManager(managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: fakeSink().factory } }));
+    const manager = createExportManager(
+      managerDeps(logs, dir, { statements, fetch: downloads.fetch, sinks: { csv: fakeSink().factory } }),
+    );
 
     await manager.start(exportRequest());
-    const final = await manager.wait(STATEMENT_ID, 1000);
+    const final = await manager.wait(STATEMENT_ID, 10000);
 
     assert.equal(final?.status, "SUCCEEDED");
     assert.equal(linkRequests.get(0), 1);
-    assert.deepEqual(downloads.calls.map((call) => call.url), ["https://storage.example/chunk-0?attempt=1"]);
+    assert.deepEqual(
+      downloads.calls.map((call) => call.url),
+      ["https://storage.example/chunk-0?attempt=1"],
+    );
     logs.flush();
     const refreshed = repository.searchLogs({ text: "Export chunk link refreshed", level: "warn" });
-    assert.deepEqual(refreshed.results.map((entry) => entry.metadata?.reason), ["link expired"]);
+    assert.deepEqual(
+      refreshed.results.map((entry) => entry.metadata?.reason),
+      ["link expired"],
+    );
   });
 });

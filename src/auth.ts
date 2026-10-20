@@ -65,7 +65,11 @@ export function normalizeHost(host: string): string {
   return normalized;
 }
 
-function cachedToken(deps: AuthDependencies, method: AuthMethod, fetchToken: () => Promise<{ token: string; expiresAt: number }>): () => Promise<string> {
+function cachedToken(
+  deps: AuthDependencies,
+  method: AuthMethod,
+  fetchToken: () => Promise<{ token: string; expiresAt: number }>,
+): () => Promise<string> {
   let cache: { token: string; expiresAt: number } | undefined;
   return async () => {
     if (cache === undefined || deps.now() >= cache.expiresAt - REFRESH_MARGIN_MS) {
@@ -84,7 +88,13 @@ function patProvider(host: string, token: string, profileWarehouseId: string | u
   return { host, method: "pat", profileWarehouseId, getToken: async () => token };
 }
 
-function m2mProvider(host: string, clientId: string, clientSecret: string, profileWarehouseId: string | undefined, deps: AuthDependencies): AuthProvider {
+function m2mProvider(
+  host: string,
+  clientId: string,
+  clientSecret: string,
+  profileWarehouseId: string | undefined,
+  deps: AuthDependencies,
+): AuthProvider {
   const getToken = cachedToken(deps, "oauth-m2m", async () => {
     const response = await deps.fetch(`${host}/oidc/v1/token`, {
       method: "POST",
@@ -96,7 +106,9 @@ function m2mProvider(host: string, clientId: string, clientSecret: string, profi
     });
     if (!response.ok) {
       const body = (await response.text()).slice(0, 200);
-      throw new AuthError(`OAuth M2M token request to ${host} failed with HTTP ${response.status}: ${body}. Check the service principal client ID and secret.`);
+      throw new AuthError(
+        `OAuth M2M token request to ${host} failed with HTTP ${response.status}: ${body}. Check the service principal client ID and secret.`,
+      );
     }
     const payload = (await response.json()) as { access_token?: string; expires_in?: number };
     if (typeof payload.access_token !== "string") {
@@ -107,7 +119,12 @@ function m2mProvider(host: string, clientId: string, clientSecret: string, profi
   return { host, method: "oauth-m2m", profileWarehouseId, getToken };
 }
 
-function u2mProvider(host: string, profile: string, profileWarehouseId: string | undefined, deps: AuthDependencies): AuthProvider {
+function u2mProvider(
+  host: string,
+  profile: string,
+  profileWarehouseId: string | undefined,
+  deps: AuthDependencies,
+): AuthProvider {
   const getToken = cachedToken(deps, "oauth-u2m", async () => {
     let output: string;
     try {
@@ -130,10 +147,14 @@ function u2mProvider(host: string, profile: string, profileWarehouseId: string |
     try {
       payload = JSON.parse(output) as { access_token?: string; expiry?: string };
     } catch (error) {
-      throw new AuthError("The Databricks CLI returned an unreadable token response; upgrade the CLI.", { cause: error });
+      throw new AuthError("The Databricks CLI returned an unreadable token response; upgrade the CLI.", {
+        cause: error,
+      });
     }
     if (typeof payload.access_token !== "string") {
-      throw new AuthError(`The Databricks CLI returned no access token for profile '${profile}'. Run \`databricks auth login --profile ${profile}\`.`);
+      throw new AuthError(
+        `The Databricks CLI returned no access token for profile '${profile}'. Run \`databricks auth login --profile ${profile}\`.`,
+      );
     }
     const expiresAt = payload.expiry === undefined ? Number.NaN : Date.parse(payload.expiry);
     return { token: payload.access_token, expiresAt: Number.isNaN(expiresAt) ? deps.now() + 300_000 : expiresAt };
@@ -163,13 +184,17 @@ export async function resolveAuth(request: AuthRequest, deps: AuthDependencies):
 
   const configText = await deps.readConfig();
   if (configText === undefined) {
-    throw new AuthError(`No Databricks credentials found (no environment credentials and no ~/.databrickscfg). ${LOGIN_HINT}`);
+    throw new AuthError(
+      `No Databricks credentials found (no environment credentials and no ~/.databrickscfg). ${LOGIN_HINT}`,
+    );
   }
   const profiles = parseDatabricksConfig(configText);
   const profile = profiles.get(request.profile);
   if (profile === undefined) {
     const available = [...profiles.keys()].join(", ") || "none";
-    throw new AuthError(`Profile '${request.profile}' not found in ~/.databrickscfg. Available profiles: ${available}. ${LOGIN_HINT}`);
+    throw new AuthError(
+      `Profile '${request.profile}' not found in ~/.databrickscfg. Available profiles: ${available}. ${LOGIN_HINT}`,
+    );
   }
   if (profile.host === undefined) {
     throw new AuthError(`Profile '${request.profile}' has no host. ${LOGIN_HINT}`);

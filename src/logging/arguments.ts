@@ -10,7 +10,10 @@ export function describeArguments(args: Record<string, unknown>): Record<string,
     described.statement = `${described.statement.slice(0, STATEMENT_LIMIT)}…[+${described.statement.length - STATEMENT_LIMIT} chars]`;
   }
   if (Array.isArray(described.parameters)) {
-    described.parameters = described.parameters.map((parameter: { name?: unknown; type?: unknown }) => ({ name: parameter.name, type: parameter.type }));
+    described.parameters = described.parameters.map((parameter: { name?: unknown; type?: unknown }) => ({
+      name: parameter.name,
+      type: parameter.type,
+    }));
   }
   return described;
 }

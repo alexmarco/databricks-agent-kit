@@ -237,6 +237,12 @@ A failed tool call writes exactly one entry: the execution scope ends the execut
 databricks-agent-kit/
   package.json            # bin: dak
   tsconfig.json
+  biome.json              # Biome lint and format (ADR 0016)
+  commitlint.config.mjs   # commit message rules (ADR 0016)
+  cliff.toml              # git-cliff: next version and release notes (ADR 0016)
+  .github/                # workflows (ci, codeql, integration, release), CODEOWNERS, Dependabot
+  .husky/                 # local git hooks: pre-commit, commit-msg
+  scripts/ci/             # branch policy of pull requests (ADR 0016)
   src/
     cli.ts                # argument parsing, transport choice, signals, 401 rate limiter, command dispatch
     workspace-session.ts  # workspace session: lazy credentials, construction of the Databricks modules, closing (ADR 0014)
@@ -259,7 +265,7 @@ databricks-agent-kit/
   README.md
 ```
 
-Runtime dependencies: `@modelcontextprotocol/server` (MCP SDK v2), `@modelcontextprotocol/node` (HTTP transport), `commander`, `zod`, and `parquet-wasm` (Parquet export, pinned to an exact version). Dev: `typescript`, `@types/node`. Tests use the built-in `node:test`. Node.js >= 22.13 (`node:sqlite` unflagged); developed on Node.js 24.
+Runtime dependencies: `@modelcontextprotocol/server` (MCP SDK v2), `@modelcontextprotocol/node` (HTTP transport), `commander`, `zod`, and `parquet-wasm` (Parquet export, pinned to an exact version). Dev: `typescript`, `@types/node`, and the quality tooling of section 10 (`@biomejs/biome`, `@commitlint/cli`, `@commitlint/config-conventional`, `husky`). Tests use the built-in `node:test`. Node.js >= 22.18 (type stripping unflagged, `node:sqlite` unflagged); developed on Node.js 24.
 
 ## 8. README requirements
 
@@ -268,6 +274,7 @@ Runtime dependencies: `@modelcontextprotocol/server` (MCP SDK v2), `@modelcontex
 - **Skills coexistence:** if the official Databricks skills are installed and include the conflicting ones (`databricks-data-discovery`, `databricks-genie-agents`, `databricks-unity-gateway`, and any skill that tells the agent to run `databricks experimental aitools tools query|discover-schema|statement`, notably `databricks-core`), add a tiebreak note to the global `AGENTS.md` (and `CLAUDE.md` for Claude Code) giving precedence to this MCP. The README provides the exact text.
 - **Logging:** location, retention, resources and the logging policy.
 - **Exports:** formats, `DAK_EXPORT_DIR`, the `null` caveat of CSV and the SQLite type mapping.
+- **Contributing:** branch names, the Conventional Commits format, the local hooks, the review requirement and the Node.js minimum (section 10).
 
 ## 9. Verification strategy
 
@@ -277,3 +284,48 @@ Runtime dependencies: `@modelcontextprotocol/server` (MCP SDK v2), `@modelcontex
 | End to end  | MCP client spawns `dak mcp` over stdio and connects over HTTP against a local stub of the Databricks REST API and a presigned-URL origin: list tools/resources, `execute_sql`, exports, cancellation, an error path         | MCP client SDK in `node:test`                                           |
 | Integration | Real workspace: auth, warehouse selection, SQL, metadata, lineage or its "unsupported" message, multi-chunk CSV, Arrow to Parquet with `NULL`, `DATE`, `BINARY` and `MAP`, `byte_count` against the downloaded size         | Gated by `DAK_IT_PROFILE`; skipped otherwise                            |
 | Agent       | Claude Code / OpenCode answer a data question using MCP tool calls                                                                                                                                                          | Manual run, documented in the README                                    |
+
+## 10. Delivery pipeline
+
+Decisions and rationale: [ADR 0016](adr/0016-ci-cd-pipeline-and-gitflow.md).
+
+### 10.1 Branch flow
+
+| Branch                  | Created from | Pull request into                       | Purpose                                 |
+| ----------------------- | ------------ | --------------------------------------- | --------------------------------------- |
+| `feature/*`, `bugfix/*` | `develop`    | `develop`                               | Changes; `bugfix/*` for non-critical fixes |
+| `develop`               | `main`       | `main`                                  | The next release                        |
+| `hotfix/*`              | `main`       | `main`, then back-merged into `develop` | Critical fix in production              |
+
+Neither `main` nor `develop` accepts direct pushes. `scripts/ci/branch-policy.sh` rejects a pull request whose branch does not match its target. Each pull request is merged with a merge commit, so the atomic commits of a branch stay in the history. It needs one approval from a code owner (the maintainer), resolved conversations and a branch up to date with its base. The maintainer is the only bypass actor, for pull requests only.
+
+### 10.2 CI gates
+
+Local hooks run the same package scripts as CI: `pre-commit` runs `npm run format:check` and `npm run lint` (Biome), and `commit-msg` runs commitlint.
+
+Required checks of pull requests into `develop` and `main`:
+
+| Check               | What it verifies                                                                                          |
+| ------------------- | --------------------------------------------------------------------------------------------------------- |
+| `quality`           | Lint, format, type check, build and `npm audit` of the runtime dependencies at high severity or above       |
+| `test (…)`          | `npm run test:coverage` on Ubuntu (Node.js 22.18 and 24) and Windows (Node.js 24); thresholds 95% lines, 85% branches and 90% functions |
+| `commits`           | commitlint over the commits of the pull request; GitHub merge commits are skipped                         |
+| `branch-policy`     | The source and target branches follow the flow above                                                     |
+| `dependency-review` | Dependency changes of the pull request                                                                    |
+| CodeQL analysis     | Static security analysis of JavaScript and TypeScript on pull requests and weekly on `main`               |
+
+Dependabot proposes npm and GitHub Actions updates weekly, grouped, into `develop`.
+
+### 10.3 Integration tests
+
+`.github/workflows/integration.yml` runs the integration tests on demand only, never on pull requests. It runs in the `integration` environment, which requires the maintainer's approval and accepts only `develop` and `main`, and authenticates with a dedicated service principal (OAuth machine-to-machine).
+
+### 10.4 Release process
+
+A push to `main` (a merged `develop` or `hotfix/*`) runs `.github/workflows/release.yml`:
+
+1. git-cliff computes the next version and the release notes from the Conventional Commits since the last tag. Only `feat`, `fix` and `perf` commits are releasable.
+2. Without releasable commits, nothing is published.
+3. Otherwise the tarball is packed with that version (the version is not committed), the `vX.Y.Z` tag is created and a GitHub Release is published with the notes and the tarball.
+
+GitHub Releases is the changelog: the repository has no changelog file and no manual version bump. The package stays private and is not published to npm.

@@ -1,5 +1,5 @@
 import { mkdir, rename, rm } from "node:fs/promises";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { exportPath } from "./paths.ts";
 import type { ChunkSink, ManifestColumn, SinkContext } from "./types.ts";
 
@@ -123,7 +123,7 @@ export async function createSqliteSink(
     (column, position) => `${quoteIdentifier(names[position] ?? "")} ${sqliteColumnType(column)}`,
   );
   const booleanFlags = context.columns.map((column) => column.type_name === "BOOLEAN");
-  let insert;
+  let insert: StatementSync;
   try {
     database.exec(`CREATE TABLE result (${columnDefinitions.join(", ")})`);
     insert = database.prepare(`INSERT INTO result VALUES (${context.columns.map(() => "?").join(", ")})`);
