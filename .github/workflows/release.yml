@@ -1,0 +1,133 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Print the next version and the release notes without creating a tag or a release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Compute the release
+    runs-on: ubuntu-latest
+    outputs:
+      releasable: ${{ steps.releasable.outputs.releasable }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Check out the history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Compute the next version
+        uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4.9.1
+        with:
+          version: v2.14.2
+          args: --bumped-version --output release-output/next-version.txt
+
+      - name: Read the next version
+        id: version
+        run: echo "tag=$(cat release-output/next-version.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Collect the releasable commits
+        uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4.9.1
+        with:
+          version: v2.14.2
+          args: --unreleased --context --output ${{ runner.temp }}/context.json
+
+      - name: Decide whether to release
+        id: releasable
+        run: echo "releasable=$(jq '.[0].commits | length > 0' "$RUNNER_TEMP/context.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Write the release notes
+        if: steps.releasable.outputs.releasable == 'true'
+        uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4.9.1
+        with:
+          version: v2.14.2
+          args: --unreleased --tag ${{ steps.version.outputs.tag }} --output release-output/RELEASE_NOTES.md
+
+      - name: Show the release that would be published
+        env:
+          RELEASABLE: ${{ steps.releasable.outputs.releasable }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if [ "$RELEASABLE" = "true" ]; then
+            { echo "Next version: $TAG"; echo; cat release-output/RELEASE_NOTES.md; } | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No releasable commits since the last tag. Nothing to release." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the release output
+        if: steps.releasable.outputs.releasable == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-output
+          path: release-output/
+          if-no-files-found: error
+
+  release:
+    name: Publish the release
+    needs: prepare
+    if: needs.prepare.outputs.releasable == 'true' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || !inputs.dry-run)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - name: Check out the release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download the release output
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-output
+          path: release-output
+
+      - name: Refuse to continue if the tag exists
+        run: |
+          set -euo pipefail
+          existing_tag=$(git ls-remote --tags origin "refs/tags/${TAG}")
+          if [ -n "$existing_tag" ]; then
+            echo "::error::Tag ${TAG} already exists"
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Pack the tarball with the release version
+        run: |
+          set -euo pipefail
+          npm version "${TAG#v}" --no-git-tag-version
+          npm run build
+          npm pack --pack-destination release-output
+          git checkout -- package.json package-lock.json
+
+      - name: Create the tag and the GitHub Release
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" "release-output/databricks-agent-kit-${TAG#v}.tgz" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes-file release-output/RELEASE_NOTES.md

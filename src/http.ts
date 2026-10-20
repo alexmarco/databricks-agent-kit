@@ -1,7 +1,11 @@
 import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { localhostHostValidation, localhostOriginValidation, NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import {
+  localhostHostValidation,
+  localhostOriginValidation,
+  NodeStreamableHTTPServerTransport,
+} from "@modelcontextprotocol/node";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { ConfigError } from "./errors.ts";
 
@@ -51,7 +55,9 @@ export async function startHttpServer(options: HttpServerOptions): Promise<Runni
     );
   }
   if (options.token !== undefined && options.token.length < MIN_TOKEN_LENGTH) {
-    throw new ConfigError(`DAK_HTTP_TOKEN must be at least ${MIN_TOKEN_LENGTH} characters; generate one with \`openssl rand -hex 32\`.`);
+    throw new ConfigError(
+      `DAK_HTTP_TOKEN must be at least ${MIN_TOKEN_LENGTH} characters; generate one with \`openssl rand -hex 32\`.`,
+    );
   }
   const validateHost = loopback ? localhostHostValidation() : undefined;
   const validateOrigin = loopback ? localhostOriginValidation() : undefined;
@@ -67,11 +73,15 @@ export async function startHttpServer(options: HttpServerOptions): Promise<Runni
         } catch {
           // The callback only observes the rejection; its failure must not change the response.
         }
-        response.writeHead(401, { "content-type": "application/json", "www-authenticate": "Bearer" }).end(JSON.stringify({ error: "unauthorized" }));
+        response
+          .writeHead(401, { "content-type": "application/json", "www-authenticate": "Bearer" })
+          .end(JSON.stringify({ error: "unauthorized" }));
         return;
       }
       if (new URL(request.url ?? "/", "http://localhost").pathname !== "/mcp") {
-        response.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "not found; the MCP endpoint is /mcp" }));
+        response
+          .writeHead(404, { "content-type": "application/json" })
+          .end(JSON.stringify({ error: "not found; the MCP endpoint is /mcp" }));
         return;
       }
       const mcpServer = options.createServer();
@@ -84,7 +94,10 @@ export async function startHttpServer(options: HttpServerOptions): Promise<Runni
       await transport.handleRequest(request, response);
     } catch (error) {
       process.stderr.write(`dak: HTTP request failed: ${(error as Error).message}\n`);
-      if (!response.headersSent) response.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: "internal error" }));
+      if (!response.headersSent)
+        response
+          .writeHead(500, { "content-type": "application/json" })
+          .end(JSON.stringify({ error: "internal error" }));
     }
   });
 

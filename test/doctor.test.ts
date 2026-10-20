@@ -1,8 +1,15 @@
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ensureWritableDirectory, formatReport, runDoctor, type DoctorConnection, type DoctorDependencies, type DoctorStatements } from "../src/doctor.ts";
+import {
+  ensureWritableDirectory,
+  formatReport,
+  runDoctor,
+  type DoctorConnection,
+  type DoctorDependencies,
+  type DoctorStatements,
+} from "../src/doctor.ts";
 import { createWarehouseSelection } from "../src/warehouses.ts";
 import { withLogs } from "./helpers.ts";
 import type { DatabricksClient } from "../src/client.ts";
@@ -30,7 +37,12 @@ const settings: Settings = {
   logLevel: "info",
 };
 
-const auth: AuthProvider = { host: "https://ws", method: "oauth-u2m", profileWarehouseId: undefined, getToken: async () => "t" };
+const auth: AuthProvider = {
+  host: "https://ws",
+  method: "oauth-u2m",
+  profileWarehouseId: undefined,
+  getToken: async () => "t",
+};
 
 const DOWNLOAD_URL = "https://storage.example.net/chunk0?sig=secret-signature";
 
@@ -59,7 +71,10 @@ function client(failing: Failures = {}): DatabricksClient {
         if (failing.identity) throw new DatabricksApiError(401, "UNAUTHENTICATED", "[UNAUTHENTICATED] bad token");
         return { userName: "alex@example.com" } as T;
       }
-      if (path === "/api/2.0/sql/warehouses") return { warehouses: [{ id: "wh1", name: "Serverless Starter", state: "RUNNING", enable_serverless_compute: true }] } as T;
+      if (path === "/api/2.0/sql/warehouses")
+        return {
+          warehouses: [{ id: "wh1", name: "Serverless Starter", state: "RUNNING", enable_serverless_compute: true }],
+        } as T;
       throw new Error(`unexpected GET ${path}`);
     },
     post: async () => {
@@ -70,7 +85,12 @@ function client(failing: Failures = {}): DatabricksClient {
 
 /** What the workspace session gives the doctor: the client, the real warehouse selection on it and the statement seam. */
 function connection(workspaceClient: DatabricksClient, statements: DoctorStatements): DoctorConnection {
-  return { auth, client: workspaceClient, warehouses: createWarehouseSelection(workspaceClient, { defaultWarehouseId: undefined }), statements };
+  return {
+    auth,
+    client: workspaceClient,
+    warehouses: createWarehouseSelection(workspaceClient, { defaultWarehouseId: undefined }),
+    statements,
+  };
 }
 
 /** Fake statement lifecycle seam for the doctor: every request is recorded. */
@@ -88,8 +108,10 @@ function fakeStatements(failing: Failures = {}) {
     async submitServerSql(request) {
       submitted.push(request.statement);
       if (failing.sqlExecution && request.statement === "SELECT 1") throw new SqlError("[PERMISSION_DENIED] no");
-      if (request.statement.includes("table_lineage") && failing.lineage) throw new SqlError("[TABLE_OR_VIEW_NOT_FOUND] system.access.table_lineage");
-      if (request.statement.includes("information_schema") && failing.informationSchema) throw new SqlError("[PERMISSION_DENIED] no");
+      if (request.statement.includes("table_lineage") && failing.lineage)
+        throw new SqlError("[TABLE_OR_VIEW_NOT_FOUND] system.access.table_lineage");
+      if (request.statement.includes("information_schema") && failing.informationSchema)
+        throw new SqlError("[PERMISSION_DENIED] no");
       return { statementId: "x", state: "SUCCEEDED" };
     },
     async submitExport(request, format) {
@@ -99,7 +121,10 @@ function fakeStatements(failing: Failures = {}) {
     async awaitExport(statementId, signal) {
       awaited.push({ statementId, signal });
       enteredAwait();
-      if (failing.exportPending) return new Promise<ExportResultInfo>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+      if (failing.exportPending)
+        return new Promise<ExportResultInfo>((_, reject) =>
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
+        );
       if (failing.awaitError) throw failing.awaitError;
       const firstLink = failing.firstLink === null ? undefined : (failing.firstLink ?? { url: DOWNLOAD_URL });
       return { columns: [], chunkCount: 1, chunkRowCounts: new Map(), truncated: false, firstLink };
@@ -121,7 +146,11 @@ interface Recorder {
   fetchCalls: Array<{ url: string; init: RequestInit | undefined }>;
 }
 
-function deps(overrides: Partial<DoctorDependencies> = {}, recorder: Recorder = { fetchCalls: [] }, failing: Failures = {}): DoctorDependencies {
+function deps(
+  overrides: Partial<DoctorDependencies> = {},
+  recorder: Recorder = { fetchCalls: [] },
+  failing: Failures = {},
+): DoctorDependencies {
   const { statements } = fakeStatements(failing);
   return {
     settings,
@@ -137,7 +166,8 @@ function deps(overrides: Partial<DoctorDependencies> = {}, recorder: Recorder = 
   };
 }
 
-const byName = (checks: Awaited<ReturnType<typeof runDoctor>>, name: string) => checks.find((check) => check.name === name);
+const byName = (checks: Awaited<ReturnType<typeof runDoctor>>, name: string) =>
+  checks.find((check) => check.name === name);
 
 test("all checks pass on a healthy workspace", async () => {
   const checks = await runDoctor(deps());
@@ -163,10 +193,23 @@ test("all checks pass on a healthy workspace", async () => {
 });
 
 test("authentication failure fails and skips the remote checks with a next step", async () => {
-  const checks = await runDoctor(deps({ connect: async () => { throw new AuthError("No Databricks credentials found. Run `databricks auth login`"); } }));
+  const checks = await runDoctor(
+    deps({
+      connect: async () => {
+        throw new AuthError("No Databricks credentials found. Run `databricks auth login`");
+      },
+    }),
+  );
   assert.equal(byName(checks, "Authentication")!.status, "fail");
   assert.match(byName(checks, "Authentication")!.detail, /databricks auth login/);
-  for (const name of ["Identity", "SQL warehouse", "SQL execution", "information_schema", "Lineage system tables", "Result download"]) {
+  for (const name of [
+    "Identity",
+    "SQL warehouse",
+    "SQL execution",
+    "information_schema",
+    "Lineage system tables",
+    "Result download",
+  ]) {
     assert.equal(byName(checks, name)!.status, "skip", name);
   }
   assert.match(byName(checks, "Result download")!.detail, /authentication failed/);
@@ -176,7 +219,11 @@ test("authentication failure fails and skips the remote checks with a next step"
 
 test("Result download is skipped when no SQL warehouse is available", async () => {
   const base = client();
-  const noWarehouse: DatabricksClient = { ...base, get: async <T>(path: string) => (path === "/api/2.0/sql/warehouses" ? ({ warehouses: [] } as T) : base.get<T>(path)) };
+  const noWarehouse: DatabricksClient = {
+    ...base,
+    get: async <T>(path: string) =>
+      path === "/api/2.0/sql/warehouses" ? ({ warehouses: [] } as T) : base.get<T>(path),
+  };
   const checks = await runDoctor(deps({ connect: async () => connection(noWarehouse, fakeStatements().statements) }));
   assert.equal(byName(checks, "SQL warehouse")!.status, "fail");
   assert.equal(byName(checks, "Result download")!.status, "skip");
@@ -225,13 +272,20 @@ test("Result download asks for the link of chunk 0 when the finished export carr
 });
 
 test("Result download warns with the export hint when the statement fails or has no link", async () => {
-  const failed = await runDoctor(deps({}, undefined, { awaitError: new SqlError("[PERMISSION_DENIED] no EXTERNAL_LINKS") }));
+  const failed = await runDoctor(
+    deps({}, undefined, { awaitError: new SqlError("[PERMISSION_DENIED] no EXTERNAL_LINKS") }),
+  );
   const failedCheck = byName(failed, "Result download")!;
   assert.equal(failedCheck.status, "warn");
   assert.equal(failedCheck.detail, "[PERMISSION_DENIED] no EXTERNAL_LINKS");
   assert.match(failedCheck.next ?? "", /EXTERNAL_LINKS/);
 
-  const noLink = await runDoctor(deps({}, undefined, { firstLink: null, chunkLinkError: new Error("Export: Databricks returned no link for chunk 0.") }));
+  const noLink = await runDoctor(
+    deps({}, undefined, {
+      firstLink: null,
+      chunkLinkError: new Error("Export: Databricks returned no link for chunk 0."),
+    }),
+  );
   const noLinkCheck = byName(noLink, "Result download")!;
   assert.equal(noLinkCheck.status, "warn");
   assert.match(noLinkCheck.detail, /no link for chunk 0/);
@@ -247,7 +301,13 @@ test("Result download warns with a proxy hint when the download fails, naming on
   assert.match(`${check.detail} ${check.next}`, /storage\.example\.net/);
   assert.doesNotMatch(`${check.detail} ${check.next}`, /secret-signature|chunk0/);
 
-  const broken = await runDoctor(deps({ fetch: async (url) => { throw new Error(`connect failed for ${url}`); } }));
+  const broken = await runDoctor(
+    deps({
+      fetch: async (url) => {
+        throw new Error(`connect failed for ${url}`);
+      },
+    }),
+  );
   const brokenCheck = byName(broken, "Result download")!;
   assert.equal(brokenCheck.status, "warn");
   assert.match(brokenCheck.next ?? "", /proxy|firewall/i);
@@ -289,12 +349,26 @@ test("Result download cancels the abandoned statement when the wait runs out and
 });
 
 test("Result download is ok when the body cannot be cancelled, and never shows URLs from error messages", async () => {
-  const unreadable = { status: 200, body: { cancel: async () => { throw new Error("stream locked"); } } } as unknown as Response;
+  const unreadable = {
+    status: 200,
+    body: {
+      cancel: async () => {
+        throw new Error("stream locked");
+      },
+    },
+  } as unknown as Response;
   const ok = await runDoctor(deps({ fetch: async () => unreadable }));
   assert.equal(byName(ok, "Result download")!.status, "ok");
 
-  const variants = "connect failed for https://storage.example.net/chunk0?sig=secret-signature and HTTPS://STORAGE.EXAMPLE.NET/chunk0?sig=secret-signature and https%3A%2F%2Fstorage.example.net%2Fchunk0%3Fsig%3Dsecret-signature";
-  const broken = await runDoctor(deps({ fetch: async () => { throw new Error(variants); } }));
+  const variants =
+    "connect failed for https://storage.example.net/chunk0?sig=secret-signature and HTTPS://STORAGE.EXAMPLE.NET/chunk0?sig=secret-signature and https%3A%2F%2Fstorage.example.net%2Fchunk0%3Fsig%3Dsecret-signature";
+  const broken = await runDoctor(
+    deps({
+      fetch: async () => {
+        throw new Error(variants);
+      },
+    }),
+  );
   const check = byName(broken, "Result download")!;
   assert.equal(check.status, "warn");
   assert.doesNotMatch(`${check.detail} ${check.next}`, /secret-signature|chunk0|https?:\/\/|https?%3A/i);
@@ -302,7 +376,13 @@ test("Result download is ok when the body cannot be cancelled, and never shows U
 });
 
 test("a failing export directory is a fail with a next step", async () => {
-  const checks = await runDoctor(deps({ ensureExportDir: async () => { throw new Error("EACCES: permission denied"); } }));
+  const checks = await runDoctor(
+    deps({
+      ensureExportDir: async () => {
+        throw new Error("EACCES: permission denied");
+      },
+    }),
+  );
   const check = byName(checks, "Export directory")!;
   assert.equal(check.status, "fail");
   assert.match(check.detail, /EACCES/);
@@ -311,7 +391,13 @@ test("a failing export directory is a fail with a next step", async () => {
 
 test("the export directory check receives the configured directory", async () => {
   const seen: string[] = [];
-  const checks = await runDoctor(deps({ ensureExportDir: async (dir) => { seen.push(dir); } }));
+  const checks = await runDoctor(
+    deps({
+      ensureExportDir: async (dir) => {
+        seen.push(dir);
+      },
+    }),
+  );
   assert.deepEqual(seen, [settings.exportDir]);
   assert.equal(byName(checks, "Export directory")!.detail, settings.exportDir);
 });
@@ -328,9 +414,21 @@ test("optional features degrade to warnings, required ones fail", async () => {
 test("old or missing CLI, broken storage and write mode are reported", async () => {
   const old = await runDoctor(deps({ runCli: async () => "Databricks CLI v0.287.0" }));
   assert.equal(byName(old, "Databricks CLI")!.status, "warn");
-  const missing = await runDoctor(deps({ runCli: async () => { throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); } }));
+  const missing = await runDoctor(
+    deps({
+      runCli: async () => {
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      },
+    }),
+  );
   assert.equal(byName(missing, "Databricks CLI")!.status, "warn");
-  const storage = await runDoctor(deps({ openRepository: async () => { throw new Error("EACCES"); } }));
+  const storage = await runDoctor(
+    deps({
+      openRepository: async () => {
+        throw new Error("EACCES");
+      },
+    }),
+  );
   assert.equal(byName(storage, "Log storage")!.status, "fail");
   const writes = await runDoctor(deps({ settings: { ...settings, allowWrites: true } }));
   assert.equal(byName(writes, "Write mode")!.status, "warn");
@@ -355,7 +453,9 @@ test("ensureWritableDirectory rejects when the path is a file", async () => {
   });
 });
 
-test("ensureWritableDirectory creates the directory with mode 0700", { skip: process.platform === "win32" }, async () => {
+test("ensureWritableDirectory creates the directory with mode 0700", {
+  skip: process.platform === "win32",
+}, async () => {
   await withLogs("stdio", async ({ dir }) => {
     const target = join(dir, "private");
     await ensureWritableDirectory(target);

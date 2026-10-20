@@ -113,7 +113,10 @@ export function quoteIdentifier(fullName: string): string {
 function matchesPattern(name: string, pattern: string | undefined): boolean {
   if (pattern === undefined || pattern === "") return true;
   if (!/[*?]/.test(pattern)) return name.toLowerCase().includes(pattern.toLowerCase());
-  const regex = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*").replaceAll("?", ".");
+  const regex = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replaceAll("*", ".*")
+    .replaceAll("?", ".");
   return new RegExp(`^${regex}$`, "i").test(name);
 }
 
@@ -172,19 +175,30 @@ export function createMetadataService(client: DatabricksClient, statements: Pick
   }
 
   /** Lists catalogs, the schemas of a catalog, or the tables of a schema; the pattern is applied before the limit. */
-  async function listObjects(request: { catalog?: string | undefined; schema?: string | undefined; pattern?: string | undefined; limit?: number | undefined }): Promise<ObjectListing> {
+  async function listObjects(request: {
+    catalog?: string | undefined;
+    schema?: string | undefined;
+    pattern?: string | undefined;
+    limit?: number | undefined;
+  }): Promise<ObjectListing> {
     if (request.schema !== undefined && request.catalog === undefined) {
       throw new InvalidArgumentError("'schema' requires 'catalog': pass both to list tables.");
     }
     const limit = clamp(request.limit, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
     const level = request.catalog === undefined ? "catalogs" : request.schema === undefined ? "schemas" : "tables";
     const all: Array<NamedItem | TableSummary> =
-      level === "catalogs" ? await listCatalogs() : level === "schemas" ? await listSchemas(request.catalog ?? "") : await listTables(request.catalog ?? "", request.schema ?? "");
+      level === "catalogs"
+        ? await listCatalogs()
+        : level === "schemas"
+          ? await listSchemas(request.catalog ?? "")
+          : await listTables(request.catalog ?? "", request.schema ?? "");
     const matching = all.filter((item) => matchesPattern(item.name, request.pattern));
     return { level, items: matching.slice(0, limit), truncated: matching.length > limit };
   }
 
-  async function readTags(fullName: string): Promise<{ table: Record<string, string>; columns: Map<string, Record<string, string>> }> {
+  async function readTags(
+    fullName: string,
+  ): Promise<{ table: Record<string, string>; columns: Map<string, Record<string, string>> }> {
     const [catalog, schema, table] = splitName(fullName);
     const filter = "catalog_name = :catalog AND schema_name = :schema AND table_name = :table";
     const result = await statements.query({
@@ -209,7 +223,10 @@ export function createMetadataService(client: DatabricksClient, statements: Pick
     return { table: tableTags, columns: columnTags };
   }
 
-  async function describeTable(fullName: string, options: { sampleRows?: number | undefined; lineage?: boolean | undefined } = {}): Promise<DescribeTableResult> {
+  async function describeTable(
+    fullName: string,
+    options: { sampleRows?: number | undefined; lineage?: boolean | undefined } = {},
+  ): Promise<DescribeTableResult> {
     splitName(fullName);
     const table = await client.get<ApiTable>(`/api/2.1/unity-catalog/tables/${encodeURIComponent(fullName)}`);
     const notes: string[] = [];
@@ -230,10 +247,17 @@ export function createMetadataService(client: DatabricksClient, statements: Pick
         ...(columnTags === undefined ? {} : { tags: columnTags }),
       };
     });
-    const primaryKey = table.table_constraints?.find((constraint) => constraint.primary_key_constraint)?.primary_key_constraint?.child_columns;
+    const primaryKey = table.table_constraints?.find((constraint) => constraint.primary_key_constraint)
+      ?.primary_key_constraint?.child_columns;
     const foreignKeys = (table.table_constraints ?? [])
-      .flatMap((constraint) => (constraint.foreign_key_constraint === undefined ? [] : [constraint.foreign_key_constraint]))
-      .map((foreignKey) => ({ columns: foreignKey.child_columns, references: foreignKey.parent_table, referencedColumns: foreignKey.parent_columns }));
+      .flatMap((constraint) =>
+        constraint.foreign_key_constraint === undefined ? [] : [constraint.foreign_key_constraint],
+      )
+      .map((foreignKey) => ({
+        columns: foreignKey.child_columns,
+        references: foreignKey.parent_table,
+        referencedColumns: foreignKey.parent_columns,
+      }));
     const clusteringColumns = parseClustering(table.properties?.clusteringColumns);
     const partitionColumns = (table.columns ?? [])
       .filter((column) => column.partition_index !== undefined)
@@ -252,7 +276,10 @@ export function createMetadataService(client: DatabricksClient, statements: Pick
     let lineage: DescribeTableResult["lineage"];
     if (options.lineage === true) {
       try {
-        lineage = { upstream: await lineageQuery(table.full_name, "upstream"), downstream: await lineageQuery(table.full_name, "downstream") };
+        lineage = {
+          upstream: await lineageQuery(table.full_name, "upstream"),
+          downstream: await lineageQuery(table.full_name, "downstream"),
+        };
       } catch (error) {
         if (error instanceof UnsupportedError) notes.push(error.message);
         else if (error instanceof SqlError) notes.push(`Lineage unavailable: ${error.message}`);
@@ -278,7 +305,11 @@ export function createMetadataService(client: DatabricksClient, statements: Pick
     };
   }
 
-  async function searchMetadata(request: { query: string; catalog?: string | undefined; limit?: number | undefined }): Promise<SearchResult[]> {
+  async function searchMetadata(request: {
+    query: string;
+    catalog?: string | undefined;
+    limit?: number | undefined;
+  }): Promise<SearchResult[]> {
     const limit = clamp(request.limit, DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT);
     const catalogFilter = request.catalog === undefined ? "" : " AND table_catalog = :catalog";
     const statement =
@@ -311,12 +342,19 @@ export function createMetadataService(client: DatabricksClient, statements: Pick
   }
 
   async function lineageQuery(fullName: string, direction: "upstream" | "downstream"): Promise<LineageEdge[]> {
-    const [selected, filtered] = direction === "upstream" ? ["source_table_full_name", "target_table_full_name"] : ["target_table_full_name", "source_table_full_name"];
+    const [selected, filtered] =
+      direction === "upstream"
+        ? ["source_table_full_name", "target_table_full_name"]
+        : ["target_table_full_name", "source_table_full_name"];
     const statement =
       `SELECT ${selected} AS table_name, CAST(max(event_time) AS STRING) AS last_seen FROM system.access.table_lineage ` +
       `WHERE ${filtered} = :table AND ${selected} IS NOT NULL GROUP BY ${selected} ORDER BY last_seen DESC LIMIT ${LINEAGE_LIMIT}`;
     try {
-      const result = await statements.query({ statement, parameters: [{ name: "table", value: fullName }], rowLimit: LINEAGE_LIMIT });
+      const result = await statements.query({
+        statement,
+        parameters: [{ name: "table", value: fullName }],
+        rowLimit: LINEAGE_LIMIT,
+      });
       return rowsOf(result).map(([table, lastSeen]) => ({ table: table ?? null, lastSeen: lastSeen ?? null }));
     } catch (error) {
       const message = (error as Error).message;

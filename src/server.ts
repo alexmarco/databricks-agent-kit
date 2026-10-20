@@ -10,7 +10,13 @@ import type { StatementLifecycle } from "./statements.ts";
 import type { Workspace } from "./workspace-session.ts";
 
 /** Names of every tool the server registers. */
-export const TOOL_NAMES = ["list_objects", "describe_table", "search_metadata", "execute_sql", "get_statement"] as const;
+export const TOOL_NAMES = [
+  "list_objects",
+  "describe_table",
+  "search_metadata",
+  "execute_sql",
+  "get_statement",
+] as const;
 
 /** The part of the statement lifecycle that runs the agent's statements: always under the read-only policy. */
 export type AgentStatements = Pick<StatementLifecycle, "submit" | "get" | "cancel">;
@@ -81,22 +87,30 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
           ? { readOnlyHint: false, destructiveHint: false }
           : { readOnlyHint: true };
     // The JSON Schema `$schema` URI tells the agent nothing and costs about 60 characters per tool in every session.
-    server.registerTool(name, { description, inputSchema: inputSchema.meta({ $schema: undefined }), annotations }, (async (args: z.output<Schema>) => {
-      try {
-        // The reply is serialized inside the scope, so a result that cannot be serialized fails the execution.
-        const reply = await scope.run(
-          { toolName: name },
-          async () => {
-            const result = await run(args);
-            return { result, text: JSON.stringify(result) };
-          },
-          { message: "Tool call completed", arguments: describeArguments(args as Record<string, unknown>), summarize: ({ result }) => summarize(result) },
-        );
-        return { content: [{ type: "text" as const, text: reply.text }] };
-      } catch (error) {
-        return { isError: true, content: [{ type: "text" as const, text: errorMessage(error) }] };
-      }
-    }) as never);
+    server.registerTool(
+      name,
+      { description, inputSchema: inputSchema.meta({ $schema: undefined }), annotations },
+      (async (args: z.output<Schema>) => {
+        try {
+          // The reply is serialized inside the scope, so a result that cannot be serialized fails the execution.
+          const reply = await scope.run(
+            { toolName: name },
+            async () => {
+              const result = await run(args);
+              return { result, text: JSON.stringify(result) };
+            },
+            {
+              message: "Tool call completed",
+              arguments: describeArguments(args as Record<string, unknown>),
+              summarize: ({ result }) => summarize(result),
+            },
+          );
+          return { content: [{ type: "text" as const, text: reply.text }] };
+        } catch (error) {
+          return { isError: true, content: [{ type: "text" as const, text: errorMessage(error) }] };
+        }
+      }) as never,
+    );
   }
 
   /** Registers a JSON resource; with `record` each read is an execution, otherwise it only flushes the log queue. */
@@ -114,7 +128,8 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
         try {
           return reply(JSON.stringify(await read(url, variables)));
         } catch (error) {
-          if (!(error instanceof DakError)) logs.lifecycle.error(error instanceof Error ? error.message : String(error), undefined, error);
+          if (!(error instanceof DakError))
+            logs.lifecycle.error(error instanceof Error ? error.message : String(error), undefined, error);
           throw error;
         }
       }
@@ -122,25 +137,45 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     };
     const config = { title: name, description, mimeType: "application/json" };
     if (typeof uri === "string") server.registerResource(name, uri, config, (url) => handler(url));
-    else server.registerResource(name, uri, config, (url, variables) => handler(url, variables as Record<string, string | string[]>));
+    else
+      server.registerResource(name, uri, config, (url, variables) =>
+        handler(url, variables as Record<string, string | string[]>),
+      );
   }
 
   tool(
     "list_objects",
     "Catalogs; schemas of catalog; tables of catalog and schema. pattern: substring or glob.",
-    z.object({ catalog: z.string().optional(), schema: z.string().optional(), pattern: z.string().optional(), limit: z.number().int().min(1).max(500).optional() }),
+    z.object({
+      catalog: z.string().optional(),
+      schema: z.string().optional(),
+      pattern: z.string().optional(),
+      limit: z.number().int().min(1).max(500).optional(),
+    }),
     async (args) => (await workspace()).metadata.listObjects(args),
   );
   tool(
     "describe_table",
     "Columns, keys and tags of catalog.schema.table; optional sample and lineage. Sample or lineage problems are reported in notes.",
-    z.object({ full_name: z.string(), sample_rows: z.number().int().min(1).max(100).optional(), lineage: z.boolean().optional() }),
-    async (args) => (await workspace()).metadata.describeTable(args.full_name, { sampleRows: args.sample_rows, lineage: args.lineage }),
+    z.object({
+      full_name: z.string(),
+      sample_rows: z.number().int().min(1).max(100).optional(),
+      lineage: z.boolean().optional(),
+    }),
+    async (args) =>
+      (await workspace()).metadata.describeTable(args.full_name, {
+        sampleRows: args.sample_rows,
+        lineage: args.lineage,
+      }),
   );
   tool(
     "search_metadata",
     "Find tables and columns by name or comment.",
-    z.object({ query: z.string().min(1), catalog: z.string().optional(), limit: z.number().int().min(1).max(200).optional() }),
+    z.object({
+      query: z.string().min(1),
+      catalog: z.string().optional(),
+      limit: z.number().int().min(1).max(200).optional(),
+    }),
     async (args) => (await workspace()).metadata.searchMetadata(args),
   );
   tool(
@@ -148,16 +183,32 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     `Run one SQL statement${deps.allowWrites === true ? " (writes enabled)" : ". Read-only: SHOW, DESCRIBE, DESC, EXPLAIN run directly; others must pass DESCRIBE QUERY (queries only); writes need --allow-writes"}. Use :name parameters. export writes the full result to a file; poll get_statement.`,
     z.object({
       statement: z.string().min(1),
-      parameters: z.array(z.object({ name: z.string(), value: z.union([z.string(), z.number(), z.boolean(), z.null()]), type: z.string().optional() })).optional(),
+      parameters: z
+        .array(
+          z.object({
+            name: z.string(),
+            value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+            type: z.string().optional(),
+          }),
+        )
+        .optional(),
       catalog: z.string().optional(),
       schema: z.string().optional(),
       row_limit: z.number().int().min(1).optional(),
       warehouse_id: z.string().optional(),
-      export: z.object({ format: z.enum(["csv", "parquet", "sqlite"]), name: z.string().max(64).optional() }).optional(),
+      export: z
+        .object({ format: z.enum(["csv", "parquet", "sqlite"]), name: z.string().max(64).optional() })
+        .optional(),
     }),
     async (args) => {
       const { statements, exports } = await workspace();
-      const request = { statement: args.statement, parameters: args.parameters, catalog: args.catalog, schema: args.schema, warehouseId: args.warehouse_id };
+      const request = {
+        statement: args.statement,
+        parameters: args.parameters,
+        catalog: args.catalog,
+        schema: args.schema,
+        warehouseId: args.warehouse_id,
+      };
       if (args.export === undefined) return statements.submit({ ...request, rowLimit: args.row_limit });
       const state = await exports.start({ statement: request, format: args.export.format, name: args.export.name });
       return { statementId: state.statementId, state: "PENDING", export: state };
@@ -166,27 +217,51 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
   tool(
     "get_statement",
     "Poll or cancel a statement or export of execute_sql.",
-    z.object({ statement_id: z.string(), wait_seconds: z.number().int().min(0).max(30).optional(), cancel: z.boolean().optional() }),
+    z.object({
+      statement_id: z.string(),
+      wait_seconds: z.number().int().min(0).max(30).optional(),
+      cancel: z.boolean().optional(),
+    }),
     async (args) => {
       const { statements, exports } = await workspace();
       const lookup = createStatementLookup({ statements, exports });
-      return args.cancel === true ? lookup.cancel(args.statement_id) : lookup.get(args.statement_id, { waitSeconds: args.wait_seconds });
+      return args.cancel === true
+        ? lookup.cancel(args.statement_id)
+        : lookup.get(args.statement_id, { waitSeconds: args.wait_seconds });
     },
   );
 
-  resource("warehouses", "resource://databricks/warehouses", "SQL warehouses visible to this identity and the default one.", true, async () => ({
-    warehouses: await (await workspace()).warehouses.list(),
-  }));
+  resource(
+    "warehouses",
+    "resource://databricks/warehouses",
+    "SQL warehouses visible to this identity and the default one.",
+    true,
+    async () => ({
+      warehouses: await (await workspace()).warehouses.list(),
+    }),
+  );
   resource("recent-errors", "resource://logs/errors/recent", "Most recent error and fatal log entries.", false, () => ({
     generatedAt: new Date().toISOString(),
     errors: repository.recentErrors(RECENT_LIMIT),
   }));
-  resource("recent-executions", "resource://logs/executions/recent", "Most recent tool calls and resource reads.", false, () => ({
-    executions: repository.recentExecutions(RECENT_LIMIT),
-  }));
-  resource("stats", "resource://logs/stats", "Execution, error and warning counts for the last 24 hours.", false, () => ({
-    last24h: repository.stats(Date.now() - DAY_MS),
-  }));
+  resource(
+    "recent-executions",
+    "resource://logs/executions/recent",
+    "Most recent tool calls and resource reads.",
+    false,
+    () => ({
+      executions: repository.recentExecutions(RECENT_LIMIT),
+    }),
+  );
+  resource(
+    "stats",
+    "resource://logs/stats",
+    "Execution, error and warning counts for the last 24 hours.",
+    false,
+    () => ({
+      last24h: repository.stats(Date.now() - DAY_MS),
+    }),
+  );
   resource(
     "execution-detail",
     new ResourceTemplate("resource://logs/execution/{executionId}", { list: undefined }),
@@ -195,7 +270,11 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     (_url, variables) => {
       const executionId = String(variables.executionId);
       const detail = repository.executionDetail(executionId);
-      if (detail === undefined) throw new DakError("NOT_FOUND", `Execution '${executionId}' not found (it may be older than the 90-day retention).`);
+      if (detail === undefined)
+        throw new DakError(
+          "NOT_FOUND",
+          `Execution '${executionId}' not found (it may be older than the 90-day retention).`,
+        );
       return detail;
     },
   );

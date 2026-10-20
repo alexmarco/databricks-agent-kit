@@ -21,5 +21,6 @@ Possible statuses: Proposed, Accepted, Superseded.
 | [0013](0013-execution-scope-module.md) | Execution scope module | Accepted |
 | [0014](0014-workspace-session-module.md) | Workspace session module | Accepted |
 | [0015](0015-review-fixes-for-the-deepened-modules.md) | Review fixes for the deepened modules | Accepted |
+| [0016](0016-ci-cd-pipeline-and-gitflow.md) | CI/CD pipeline, simplified GitFlow and automated releases | Accepted |
 
 Current design: [docs/design.md](../design.md).

@@ -137,15 +137,12 @@ test("parquet sink reports a chunk that is not an Arrow stream with its index an
     const sink = await createParquetSink(context);
     await sink.write(chunk(0));
 
-    await assert.rejects(
-      sink.write(chunk(1, new TextEncoder().encode("not an arrow stream"))),
-      (error: unknown) => {
-        assert.ok(error instanceof Error);
-        assert.match(error.message, /chunk 1/);
-        assert.ok(error.cause !== undefined);
-        return true;
-      },
-    );
+    await assert.rejects(sink.write(chunk(1, new TextEncoder().encode("not an arrow stream"))), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /chunk 1/);
+      assert.ok(error.cause !== undefined);
+      return true;
+    });
     assert.deepEqual(await readdir(`${finalPath}.part`), ["part-00000.parquet"]);
 
     await sink.abort();

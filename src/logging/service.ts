@@ -66,7 +66,9 @@ export interface LogService {
 function redact(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redact);
   if (value !== null && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, SECRET_KEY.test(key) ? "[REDACTED]" : redact(entry)]));
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, SECRET_KEY.test(key) ? "[REDACTED]" : redact(entry)]),
+    );
   }
   return value;
 }
@@ -130,9 +132,19 @@ export function createLogService(options: LogServiceOptions): LogService {
     const startedAt = Date.now();
     const executionId = uuidv7(startedAt);
     const source = target.toolName ?? target.resourceUri ?? target.promptName;
-    const category = target.toolName !== undefined ? "tool" : target.resourceUri !== undefined ? "resource" : target.promptName !== undefined ? "prompt" : "server";
+    const category =
+      target.toolName !== undefined
+        ? "tool"
+        : target.resourceUri !== undefined
+          ? "resource"
+          : target.promptName !== undefined
+            ? "prompt"
+            : "server";
     let finished = false;
-    enqueue({ type: "execution-start", execution: { executionId, startedAt, transport, ...target, status: "started" } });
+    enqueue({
+      type: "execution-start",
+      execution: { executionId, startedAt, transport, ...target, status: "started" },
+    });
 
     const log =
       (level: LogLevel): LogMethod =>
