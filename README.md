@@ -484,3 +484,13 @@ The only runtime dependency added for exports is [`parquet-wasm`](https://github
 an exact version and imported from `parquet-wasm/node`; it converts the Arrow chunks of Databricks into Parquet files
 (see [ADR 0004](docs/adr/0004-parquet-with-parquet-wasm.md)). CSV and SQLite exports use only Node.js built-ins.
 Decisions are recorded in [docs/adr](docs/adr/README.md).
+
+## Contributing
+
+Contributions are made through pull requests. The branch flow, the checks and the release process are described in [docs/design.md](docs/design.md#10-delivery-pipeline) and recorded in [ADR 0016](docs/adr/0016-ci-cd-pipeline-and-gitflow.md).
+
+- **Requirements:** Node.js 22.18 or later. Run `npm ci` once; it installs the dependencies and the git hooks.
+- **Branch names:** `feature/<desc>` and `bugfix/<desc>` branch from `develop` and merge into `develop`. `hotfix/<desc>` branches from `main`, merges into `main` and is then merged back into `develop`. Pull requests into `main` come only from `develop` or `hotfix/*`.
+- **Commit messages:** [Conventional Commits](https://www.conventionalcommits.org/), `type(scope): description`, for example `fix(export): ...`. Each commit is checked locally by the commit-msg hook and by CI for every commit of the pull request. Merge commits created by GitHub are not checked.
+- **Local hooks:** `pre-commit` runs `npm run format:check` and `npm run lint` (Biome); `commit-msg` runs commitlint. Before you push, run the same checks as CI: `npm run typecheck`, `npm run build` and `npm run test:coverage`.
+- **Review:** each pull request needs one approval from a code owner and passing checks (`quality`, `test`, `commits`, `branch-policy`, `dependency-review` and CodeQL). The branch must be up to date with its base and conversations must be resolved. Pull requests are merged with a merge commit.
