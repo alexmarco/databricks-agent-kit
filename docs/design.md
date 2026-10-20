@@ -25,18 +25,19 @@ Skills are out of scope for the code: the official installer (`databricks aitool
 ```mermaid
 flowchart LR
     subgraph Local machine
-        Agent[Coding agent<br/>own model subscription]
-        MCP[dak mcp<br/>stdio or HTTP]
-        Log[(logs.db<br/>SQLite)]
-        Exports[(DAK_EXPORT_DIR<br/>csv, parquet, sqlite)]
-        CLI[Databricks CLI<br/>U2M token cache]
+        Agent[Coding agent]
+        MCP[dak mcp]
+        Log[(logs.db)]
+        Exports[(DAK_EXPORT_DIR)]
+        CLI[Databricks CLI]
     end
     Agent -- MCP tools/resources --> MCP
     MCP -- batched writes --> Log
     MCP -- result chunks --> Exports
     MCP -- U2M token --> CLI
-    MCP -- REST: SQL Statement Execution,<br/>Unity Catalog, Warehouses --> WS[(Databricks workspace)]
-    MCP -- presigned URLs, no token --> Cloud[(Cloud storage<br/>result chunks)]
+    MCP -- REST APIs --> WS[(Databricks workspace)]
+    MCP -- presigned URLs, no token --> Cloud[(Cloud storage)]
+    classDef default fill:#E8F1FF,stroke:#2F6FDB,color:#1F2937
 ```
 
 One package, one binary (`dak`):
@@ -101,7 +102,7 @@ The server sends MCP `instructions` and tool descriptions stating that these too
 
 ### 4.3 SQL execution rules
 
-The **statement lifecycle** module (`src/statements.ts`, ADR 0009, terms in [GLOSSARY.md](../GLOSSARY.md)) owns everything below: it builds the request, applies the read-only policy, submits, polls, cancels and shapes the bounded result. Its interface is `submit(request)` (plain statement of the agent, always under the read-only policy), `submitServerSql(request)` (plain statement of server-written SQL, no check), `query(request)` (server-written SQL that must finish), `submitExport(request, format)`, `awaitExport(statementId, signal)`, `exportChunkLink(statementId, index, signal)`, `get(statementId, { rowLimit?, waitSeconds? })` and `cancel(statementId)` (the export methods are in ADR 0010). The read-only policy is implemented once and is chosen by the entry point (ADR 0015): it applies to `submit` and `submitExport` (`execute_sql` and exports); statements the server writes itself (metadata queries through `query`, doctor probes through `submitServerSql`) skip it, and the tool handlers receive only `submit`, `get` and `cancel` (`AgentStatements`). `awaitExport` waits with a sleep that its abort signal releases, so an aborted wait leaves no timer behind. The export manager makes no statement request: it submits, waits, requests chunk links and cancels through this module. The doctor's download check also runs on this module (`submitExport`, `awaitExport`, `exportChunkLink`, `cancel`), so `src/statements.ts` is the only file that builds the statements path. `get_statement` asks the **statement lookup** (`src/statement-lookup.ts`, ADR 0011) about any id: `get(statementId, { waitSeconds? })` and `cancel(statementId)`. An id that the export manager knows is an export (its state, or `cancelled: false` with its state when it already ended); any other id is a plain statement that goes to `get` and `cancel` of this module; the tool handler has one path (the server builds the lookup from the `statements` and `exports` of the workspace on each call, ADR 0014). The **warehouse selection** module (`src/warehouses.ts`, ADR 0012) is a separate responsibility: `resolve(explicit?)` gives the warehouse id (explicit, then configured, then the remembered automatic choice) and `list()` gives the accessible warehouses with the default marked. The lifecycle module receives `resolve` as an injected function and never depends on the module itself.
+The **statement lifecycle** module (`src/statements.ts`, ADR 0009, terms in GLOSSARY.md) owns everything below: it builds the request, applies the read-only policy, submits, polls, cancels and shapes the bounded result. Its interface is `submit(request)` (plain statement of the agent, always under the read-only policy), `submitServerSql(request)` (plain statement of server-written SQL, no check), `query(request)` (server-written SQL that must finish), `submitExport(request, format)`, `awaitExport(statementId, signal)`, `exportChunkLink(statementId, index, signal)`, `get(statementId, { rowLimit?, waitSeconds? })` and `cancel(statementId)` (the export methods are in ADR 0010). The read-only policy is implemented once and is chosen by the entry point (ADR 0015): it applies to `submit` and `submitExport` (`execute_sql` and exports); statements the server writes itself (metadata queries through `query`, doctor probes through `submitServerSql`) skip it, and the tool handlers receive only `submit`, `get` and `cancel` (`AgentStatements`). `awaitExport` waits with a sleep that its abort signal releases, so an aborted wait leaves no timer behind. The export manager makes no statement request: it submits, waits, requests chunk links and cancels through this module. The doctor's download check also runs on this module (`submitExport`, `awaitExport`, `exportChunkLink`, `cancel`), so `src/statements.ts` is the only file that builds the statements path. `get_statement` asks the **statement lookup** (`src/statement-lookup.ts`, ADR 0011) about any id: `get(statementId, { waitSeconds? })` and `cancel(statementId)`. An id that the export manager knows is an export (its state, or `cancelled: false` with its state when it already ended); any other id is a plain statement that goes to `get` and `cancel` of this module; the tool handler has one path (the server builds the lookup from the `statements` and `exports` of the workspace on each call, ADR 0014). The **warehouse selection** module (`src/warehouses.ts`, ADR 0012) is a separate responsibility: `resolve(explicit?)` gives the warehouse id (explicit, then configured, then the remembered automatic choice) and `list()` gives the accessible warehouses with the default marked. The lifecycle module receives `resolve` as an injected function and never depends on the module itself.
 
 - **Read-only by default** (ADR 0008). Anything that is not a plain leading read keyword is analyzed by Databricks itself, so comments, string literals and dialect features need no handling here and nothing is executed:
   1. Statements holding a `;` before their last non-whitespace character are rejected without any call, so the check never submits several statements. Read-only mode cannot tell several statements from a `;` inside a literal; the `Read-only mode` message tells the agent to pass such literals as `:name` parameters. A single trailing `;` is accepted.
@@ -269,6 +270,8 @@ Runtime dependencies: `@modelcontextprotocol/server` (MCP SDK v2), `@modelcontex
 
 ## 8. README requirements
 
+The README is a summary of the documentation site in `docs/`, which takes precedence over it (ADR 0017). The list below describes the README's content.
+
 - **Authentication:** every supported method (OAuth U2M through the CLI, personal access token, OAuth M2M with a service principal), how to configure each, the resolution order, and the manual actions required (install/upgrade the CLI, `databricks auth login`, choose or create a warehouse, grant permissions, create a read-only principal for agents, PAT or service principal creation where applicable).
 - **Agent registration:** snippets for Claude Code, Codex, OpenCode and Cursor, for stdio and HTTP.
 - **Skills coexistence:** if the official Databricks skills are installed and include the conflicting ones (`databricks-data-discovery`, `databricks-genie-agents`, `databricks-unity-gateway`, and any skill that tells the agent to run `databricks experimental aitools tools query|discover-schema|statement`, notably `databricks-core`), add a tiebreak note to the global `AGENTS.md` (and `CLAUDE.md` for Claude Code) giving precedence to this MCP. The README provides the exact text.
@@ -329,3 +332,11 @@ A push to `main` (a merged `develop` or `hotfix/*`) runs `.github/workflows/rele
 3. Otherwise the tarball is packed with that version (the version is not committed), the `vX.Y.Z` tag is created and a GitHub Release is published with the notes and the tarball.
 
 GitHub Releases is the changelog: the repository has no changelog file and no manual version bump. The package stays private and is not published to npm.
+
+### 10.5 Documentation site
+
+Decisions and rationale: [ADR 0017](adr/0017-documentation-site-on-github-pages.md).
+
+- `.github/workflows/docs.yml` builds the VitePress site from `docs/` (`npm run docs:build`) on pull requests into `develop` and `main`.
+- A push to `main` builds the site again and deploys it to GitHub Pages through the `github-pages` environment. It does not depend on a release, so the site shows the current state of `main`.
+- `GLOSSARY.md` and the root `README.md` are not published. `docs/research/` is excluded from the build.
