@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 500" width="960" height="500" font-family="'Segoe Print','Comic Sans MS','Bradley Hand',cursive" font-size="16">
+  <title>How dak connects a coding agent to Databricks</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#374151"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="960" height="500" fill="#FFFFFF"/>
+  <text x="40" y="52" font-size="24" font-weight="bold" fill="#1F2937">How dak connects your agent to Databricks</text>
+
+  <!-- Coding agent -->
+  <rect x="40" y="200" width="190" height="120" rx="18" fill="#F1EBFF" stroke="#7A4FD6" stroke-width="3"/>
+  <text x="135" y="242" text-anchor="middle" font-weight="bold" fill="#1F2937">Coding agent</text>
+  <text x="135" y="270" text-anchor="middle" font-size="14" fill="#1F2937">Claude Code, Codex,</text>
+  <text x="135" y="292" text-anchor="middle" font-size="14" fill="#1F2937">OpenCode, Cursor</text>
+
+  <!-- dak server -->
+  <rect x="340" y="110" width="220" height="300" rx="18" fill="#E8F1FF" stroke="#2F6FDB" stroke-width="3"/>
+  <text x="450" y="146" text-anchor="middle" font-size="20" font-weight="bold" fill="#1F2937">dak</text>
+  <rect x="360" y="164" width="180" height="40" rx="10" fill="#FFFFFF" stroke="#2F6FDB" stroke-width="1.5"/>
+  <text x="450" y="190" text-anchor="middle" font-size="14" fill="#1F2937">5 MCP tools</text>
+  <rect x="360" y="214" width="180" height="40" rx="10" fill="#FFFFFF" stroke="#2F6FDB" stroke-width="1.5"/>
+  <text x="450" y="240" text-anchor="middle" font-size="14" fill="#1F2937">Read-only check</text>
+  <rect x="360" y="264" width="180" height="40" rx="10" fill="#FFFFFF" stroke="#2F6FDB" stroke-width="1.5"/>
+  <text x="450" y="290" text-anchor="middle" font-size="14" fill="#1F2937">Export manager</text>
+  <rect x="360" y="314" width="180" height="40" rx="10" fill="#FFFFFF" stroke="#2F6FDB" stroke-width="1.5"/>
+  <text x="450" y="340" text-anchor="middle" font-size="14" fill="#1F2937">Logs in SQLite</text>
+
+  <!-- Databricks workspace -->
+  <rect x="720" y="60" width="220" height="170" rx="18" fill="#E6F7EE" stroke="#1E9E62" stroke-width="3"/>
+  <text x="830" y="98" text-anchor="middle" font-weight="bold" fill="#1F2937">Databricks workspace</text>
+  <text x="830" y="130" text-anchor="middle" font-size="14" fill="#1F2937">SQL warehouse</text>
+  <text x="830" y="156" text-anchor="middle" font-size="14" fill="#1F2937">Unity Catalog</text>
+  <text x="830" y="182" text-anchor="middle" font-size="14" fill="#1F2937">Statement Execution API</text>
+
+  <!-- Cloud storage -->
+  <rect x="720" y="300" width="220" height="110" rx="18" fill="#FFF4E5" stroke="#E07B00" stroke-width="3"/>
+  <text x="830" y="338" text-anchor="middle" font-weight="bold" fill="#1F2937">Cloud storage</text>
+  <text x="830" y="368" text-anchor="middle" font-size="14" fill="#1F2937">Presigned result chunks</text>
+
+  <!-- Connections -->
+  <path d="M 230 260 L 340 260" fill="none" stroke="#374151" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="285" y="234" text-anchor="middle" font-size="14" fill="#374151">MCP over</text>
+  <text x="285" y="252" text-anchor="middle" font-size="14" fill="#374151">stdio or HTTP</text>
+
+  <path d="M 560 200 C 610 190, 660 170, 720 150" fill="none" stroke="#374151" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="640" y="122" text-anchor="middle" font-size="14" fill="#374151">REST, with your token</text>
+
+  <path d="M 560 340 C 610 345, 660 350, 720 355" fill="none" stroke="#374151" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="640" y="322" text-anchor="middle" font-size="14" fill="#374151">downloads, no token</text>
+
+  <text x="40" y="462" font-size="15" fill="#4B5563">Read-only by default. The Unity Catalog permissions of the identity are the security boundary.</text>
+</svg>
