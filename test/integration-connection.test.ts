@@ -26,7 +26,8 @@ test("missing connection settings fail with the names of the missing variables a
       const message = error instanceof Error ? error.message : String(error);
       assert.match(message, /DATABRICKS_CLIENT_SECRET/);
       assert.match(message, /DAK_IT_PROFILE/);
-      assert.ok(!message.includes(host) && !message.includes("client-id-value"), "the message holds no values");
+      assert.doesNotMatch(message, /https?:\/\//, "the message holds no host URL");
+      assert.ok(!message.includes("client-id-value"), "the message holds no values");
       return true;
     },
   );
