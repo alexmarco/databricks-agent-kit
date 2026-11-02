@@ -38,6 +38,11 @@ Node.js 22.18 or later is required (type stripping is unflagged from that versio
 - Record every relevant technical decision as an ADR in `docs/adr/` and update `docs/design.md` when the design changes. A superseded ADR is not rewritten: add a new one.
 - The Unity Catalog permissions of the configured identity are the real security boundary. The read-only check is defense in depth.
 
+## Issue tracker
+
+- Work items are GitHub issues in `alexmarco/databricks-agent-kit`, managed with the `gh` CLI.
+- A ticket has the title `<Topic> NN: <title>`, the sections "What to build", "Acceptance criteria" and "Blocked by" (`#N` references), and the label `ready-for-agent` when an agent can take it.
+
 ## Git
 
 - Never commit directly to `main`. Work on a branch and keep commits atomic, one logical change each.
