@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { AuthProvider } from "../src/auth.ts";
+import { loadDatabaseSync } from "../src/sqlite.ts";
 import type { DatabricksClient, QueryValue } from "../src/client.ts";
 import { AuthError, DakError } from "../src/errors.ts";
 import { ReadOnlyViolationError } from "../src/statements.ts";
@@ -19,6 +21,7 @@ const auth: AuthProvider = {
   host: "https://ws",
   method: "pat",
   profileWarehouseId: undefined,
+  cacheIdentity: "test-identity",
   getToken: async () => "t",
 };
 
@@ -43,6 +46,9 @@ function fakeWorkspace() {
         ? { statement_id: "st-export", status: { state: "PENDING" } }
         : succeeded;
     }
+    if (method === "GET" && path === "/api/2.1/unity-catalog/catalogs") return { catalogs: [{ name: "main" }] };
+    if (method === "GET" && path === "/api/2.1/unity-catalog/tables/main.s.t")
+      return { full_name: "main.s.t", columns: [] };
     if (method === "POST" && path.endsWith("/cancel")) return {};
     throw new Error(`unexpected ${method} ${path}`);
   };
@@ -301,4 +307,113 @@ test("connecting without a log service resolves the credentials and builds the m
 test("connecting fails with the authentication error and keeps nothing", async () => {
   const { adapters: fake } = adapters(undefined, 1);
   await assert.rejects(connectWorkspace(fake, { limits }), AuthError);
+});
+
+const cacheOptions = (dir: string, ttlSeconds: number) => ({ path: join(dir, "cache.db"), ttlSeconds });
+const tableRequests = (calls: Array<{ path: string }>) => calls.filter((call) => call.path.includes("/tables/")).length;
+
+test("the metadata cache is shared across sessions of one identity and its status reaches the final log entry", async () => {
+  await withLogs("stdio", async ({ logs, repository, dir }) => {
+    const options = { ...sessionOptions(dir, logs), cache: cacheOptions(dir, 3600) };
+    const first = adapters();
+    const firstSession = createWorkspaceSession(first.adapters, options);
+    const describe = async (session: ReturnType<typeof createWorkspaceSession>, toolName: string) =>
+      session.scope.run({ toolName }, async () => (await session.workspace()).metadata.describeTable("main.s.t"), {
+        message: "Tool call completed",
+      });
+    assert.equal((await describe(firstSession, "first_miss")).cache?.status, "miss");
+    assert.equal((await describe(firstSession, "first_hit")).cache?.status, "hit");
+    await firstSession.close();
+
+    const second = adapters();
+    const secondSession = createWorkspaceSession(second.adapters, options);
+    assert.equal((await describe(secondSession, "second_hit")).cache?.status, "hit");
+    await secondSession.close();
+    assert.equal(tableRequests(first.workspace.calls) + tableRequests(second.workspace.calls), 1);
+
+    logs.flush();
+    const statusOf = (toolName: string) => {
+      const execution = repository.recentExecutions(50).find((candidate) => candidate.toolName === toolName);
+      const entries = repository.executionDetail(execution?.executionId ?? "")?.logs ?? [];
+      return entries.find((entry) => entry.message === "Tool call completed")?.metadata?.cacheStatus;
+    };
+    assert.equal(statusOf("first_miss"), "miss");
+    assert.equal(statusOf("first_hit"), "hit");
+    assert.equal(statusOf("second_hit"), "hit");
+  });
+});
+
+test("a cache that fails is a warn in the log and a bypassed answer, never a tool error", async () => {
+  await withLogs("stdio", async ({ logs, repository, dir }) => {
+    const options = { ...sessionOptions(dir, logs), cache: cacheOptions(dir, 3600) };
+    const session = createWorkspaceSession(adapters().adapters, options);
+    const describe = (toolName: string) =>
+      session.scope.run({ toolName }, async () => (await session.workspace()).metadata.describeTable("main.s.t"), {
+        message: "Tool call completed",
+      });
+    assert.equal((await describe("healthy")).cache?.status, "miss");
+    const Database = await loadDatabaseSync();
+    const other = new Database(join(dir, "cache.db"));
+    other.exec("DROP TABLE cache_entries");
+    other.close();
+    assert.equal((await describe("damaged")).cache?.status, "bypassed");
+    await session.close();
+
+    logs.flush();
+    const execution = repository.recentExecutions(50).find((candidate) => candidate.toolName === "damaged");
+    assert.equal(execution?.status, "completed");
+    const entries = repository.executionDetail(execution?.executionId ?? "")?.logs ?? [];
+    assert.deepEqual(
+      entries.filter((entry) => entry.level === "warn").map((entry) => entry.message),
+      ["Metadata cache cannot be read; answering from Databricks"],
+    );
+    assert.equal(entries.find((entry) => entry.message === "Tool call completed")?.metadata?.cacheStatus, "bypassed");
+  });
+});
+
+test("list_objects reports its cache status on the final log entry", async () => {
+  await withLogs("stdio", async ({ logs, repository, dir }) => {
+    const session = createWorkspaceSession(adapters().adapters, {
+      ...sessionOptions(dir, logs),
+      cache: cacheOptions(dir, 3600),
+    });
+    for (const toolName of ["list_miss", "list_hit"]) {
+      await session.scope.run({ toolName }, async () => (await session.workspace()).metadata.listObjects({}), {
+        message: "Tool call completed",
+      });
+    }
+    await session.close();
+    logs.flush();
+    const statusOf = (toolName: string) => {
+      const execution = repository.recentExecutions(50).find((candidate) => candidate.toolName === toolName);
+      const entries = repository.executionDetail(execution?.executionId ?? "")?.logs ?? [];
+      return entries.find((entry) => entry.message === "Tool call completed")?.metadata?.cacheStatus;
+    };
+    assert.equal(statusOf("list_miss"), "miss");
+    assert.equal(statusOf("list_hit"), "hit");
+  });
+});
+
+test("a session with the cache disabled opens no cache.db and its answers carry no cache field", async () => {
+  await withLogs("stdio", async ({ logs, dir }) => {
+    const { adapters: fake } = adapters();
+    const session = createWorkspaceSession(fake, { ...sessionOptions(dir, logs), cache: cacheOptions(dir, 0) });
+    const description = await (await session.workspace()).metadata.describeTable("main.s.t");
+    assert.equal(description.cache, undefined);
+    await session.close();
+    await assert.rejects(stat(join(dir, "cache.db")), { code: "ENOENT" });
+  });
+});
+
+test("sessions of different cache identities keep separate entries on the same file", async () => {
+  await withLogs("stdio", async ({ logs, dir }) => {
+    const options = { ...sessionOptions(dir, logs), cache: cacheOptions(dir, 3600) };
+    const other = adapters(undefined, 0, { ...auth, cacheIdentity: "another-identity" });
+    const first = createWorkspaceSession(adapters().adapters, options);
+    const second = createWorkspaceSession(other.adapters, options);
+    assert.equal((await (await first.workspace()).metadata.describeTable("main.s.t")).cache?.status, "miss");
+    assert.equal((await (await second.workspace()).metadata.describeTable("main.s.t")).cache?.status, "miss");
+    await first.close();
+    await second.close();
+  });
 });

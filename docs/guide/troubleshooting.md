@@ -12,7 +12,6 @@ table below lists the messages you are most likely to see.
 | `Databricks CLI not found on PATH`                     | Install the CLI, or use a personal access token                                                                       |
 | `[PERMISSION_DENIED] ...`                              | Ask an admin for the privilege named in the message. See [privileges](/guide/authentication#privileges-by-capability) |
 | `No SQL warehouse is accessible`                       | Set `DATABRICKS_WAREHOUSE_ID`, or get `CAN USE` on a warehouse                                                        |
-| `Lineage is unavailable`                               | Lineage system tables are not enabled, or not readable, in this workspace                                             |
 
 ## Statements
 

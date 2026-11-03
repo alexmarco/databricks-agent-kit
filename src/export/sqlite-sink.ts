@@ -1,5 +1,6 @@
 import { mkdir, rename, rm } from "node:fs/promises";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
+import { loadDatabaseSync } from "../sqlite.ts";
 import { exportPath } from "./paths.ts";
 import type { ChunkSink, ManifestColumn, SinkContext } from "./types.ts";
 
@@ -12,22 +13,6 @@ const SIDECAR_SUFFIXES = ["-wal", "-journal", "-shm"];
 const MAX_COLUMNS = 2000;
 
 type ChunkValue = string | null;
-
-// Identical copy of loadDatabaseSync in src/logging/repository.ts; share it when a third caller appears.
-/** Loads node:sqlite without its one-time ExperimentalWarning (stderr noise for MCP clients). */
-async function loadDatabaseSync(): Promise<typeof DatabaseSync> {
-  const originalEmitWarning = process.emitWarning;
-  process.emitWarning = function filtered(this: unknown, warning: string | Error, ...rest: unknown[]) {
-    const text = typeof warning === "string" ? warning : warning.message;
-    if (text.includes("SQLite")) return;
-    return (originalEmitWarning as (...args: unknown[]) => void).call(process, warning, ...rest);
-  } as typeof process.emitWarning;
-  try {
-    return (await import("node:sqlite")).DatabaseSync;
-  } finally {
-    process.emitWarning = originalEmitWarning;
-  }
-}
 
 /**
  * SQLite column affinity for a Databricks column: integers and booleans give `INTEGER`, floating

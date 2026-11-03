@@ -5,6 +5,7 @@ import type { ExecutionScope } from "./execution-scope.ts";
 import { describeArguments } from "./logging/arguments.ts";
 import type { LogRepository } from "./logging/repository.ts";
 import type { LogService } from "./logging/service.ts";
+import type { CacheKind } from "./metadata-cache.ts";
 import { createStatementLookup } from "./statement-lookup.ts";
 import type { StatementLifecycle } from "./statements.ts";
 import type { Workspace } from "./workspace-session.ts";
@@ -28,7 +29,9 @@ export interface ServerDependencies {
    * its execution, so a failed credential resolution is the single error of that call and the next call tries again.
    * The tool handlers receive only the statement methods of the agent: not the ones for server-written SQL (ADR 0015).
    */
-  workspace(): Promise<Pick<Workspace, "warehouses" | "metadata" | "exports"> & { statements: AgentStatements }>;
+  workspace(): Promise<
+    Pick<Workspace, "warehouses" | "metadata" | "exports" | "cache"> & { statements: AgentStatements }
+  >;
   /** Opens the execution of each tool call, recorded resource read and export; the services annotate through it. */
   scope: ExecutionScope;
   logs: LogService;
@@ -47,9 +50,10 @@ const INSTRUCTIONS = [
   "Use these tools instead of the Databricks CLI (`databricks experimental aitools tools query|discover-schema|statement`) or Genie for SQL and metadata work.",
   "Tools: list_objects, describe_table, search_metadata, execute_sql, get_statement.",
   "To answer a data question: list_objects or search_metadata -> describe_table -> execute_sql.",
+  "list_objects and describe_table answer from a local cache and say so in `cache`; pass `refresh: true` after changing a table or schema.",
   "Results are row- and size-limited and report `truncated`; aggregate in SQL, or pass `export` to execute_sql to write the full result to a file.",
   "Long statements and exports return a statement_id: follow them with get_statement.",
-  "Warehouses: resource://databricks/warehouses. Operational logs: resource://logs/*.",
+  "Warehouses: resource://databricks/warehouses. Cache efficiency: resource://cache/stats and resource://cache/entry/{table/<full_name>|listing/<path>}. Operational logs: resource://logs/*.",
 ].join(" ");
 
 function errorMessage(error: unknown): string {
@@ -145,28 +149,21 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
 
   tool(
     "list_objects",
-    "Catalogs; schemas of catalog; tables of catalog and schema. pattern: substring or glob.",
+    "Catalogs; schemas of catalog; tables of catalog and schema. pattern: substring or glob. Cached: refresh=true reloads.",
     z.object({
       catalog: z.string().optional(),
       schema: z.string().optional(),
       pattern: z.string().optional(),
       limit: z.number().int().min(1).max(500).optional(),
+      refresh: z.boolean().optional(),
     }),
     async (args) => (await workspace()).metadata.listObjects(args),
   );
   tool(
     "describe_table",
-    "Columns, keys and tags of catalog.schema.table; optional sample and lineage. Sample or lineage problems are reported in notes.",
-    z.object({
-      full_name: z.string(),
-      sample_rows: z.number().int().min(1).max(100).optional(),
-      lineage: z.boolean().optional(),
-    }),
-    async (args) =>
-      (await workspace()).metadata.describeTable(args.full_name, {
-        sampleRows: args.sample_rows,
-        lineage: args.lineage,
-      }),
+    "Columns, comments, keys, clustering, partitioning, owner and audit times of catalog.schema.table. Starts no warehouse. Cached: refresh=true reloads.",
+    z.object({ full_name: z.string(), refresh: z.boolean().optional() }),
+    async (args) => (await workspace()).metadata.describeTable(args.full_name, { refresh: args.refresh }),
   );
   tool(
     "search_metadata",
@@ -239,6 +236,55 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     async () => ({
       warehouses: await (await workspace()).warehouses.list(),
     }),
+  );
+  const CACHE_DISABLED = {
+    enabled: false,
+    message: "The metadata cache is disabled (DAK_CACHE_TTL=0).",
+  };
+  /** One cache entry of the current identity; `key` is the table name or the level path (empty for the catalogs). */
+  const cacheEntry = async (kind: CacheKind, key: string) => {
+    const { cache } = await workspace();
+    if (cache === undefined) return CACHE_DISABLED;
+    const entry = cache.entry(kind, key);
+    if (entry === undefined) {
+      const what = key === "" ? "the catalogs" : `'${key}'`;
+      throw new DakError(
+        "NOT_FOUND",
+        `No cache entry for ${kind} ${what}: it was never looked up with this identity, or it was purged.`,
+      );
+    }
+    return { enabled: true, kind, key, ...entry };
+  };
+  resource(
+    "cache-stats",
+    "resource://cache/stats",
+    "Efficiency of the metadata cache for this identity: hits, misses, reloads, hit ratio and time saved, by kind.",
+    true,
+    async () => {
+      const { cache } = await workspace();
+      return cache === undefined ? CACHE_DISABLED : { enabled: true, ...cache.stats() };
+    },
+  );
+  resource(
+    "cache-entry-table",
+    new ResourceTemplate("resource://cache/entry/table/{full_name}", { list: undefined }),
+    "Counters and times of the cached description of one table.",
+    true,
+    (_url, variables) => cacheEntry("table", String(variables.full_name)),
+  );
+  resource(
+    "cache-entry-listing",
+    new ResourceTemplate("resource://cache/entry/listing/{path}", { list: undefined }),
+    "Counters and times of the cached listing of a catalog (its schemas) or a schema (catalog.schema, its tables).",
+    true,
+    (_url, variables) => cacheEntry("listing", String(variables.path)),
+  );
+  resource(
+    "cache-entry-catalogs",
+    "resource://cache/entry/listing/",
+    "Counters and times of the cached listing of the catalogs.",
+    true,
+    () => cacheEntry("listing", ""),
   );
   resource("recent-errors", "resource://logs/errors/recent", "Most recent error and fatal log entries.", false, () => ({
     generatedAt: new Date().toISOString(),

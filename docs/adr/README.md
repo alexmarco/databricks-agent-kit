@@ -26,5 +26,6 @@ Possible statuses: Proposed, Accepted, Superseded.
 | [0018](0018-excalidraw-diagrams-rendered-to-svg.md)          | Excalidraw diagrams rendered to SVG with headless Chrome           | Accepted |
 | [0019](0019-dependabot-branches-and-mermaid-pin.md)          | Dependabot branches in the branch policy, and Mermaid pinned to 11 | Accepted |
 | [0020](0020-dependabot-reads-its-configuration-from-main.md) | Dependabot reads its configuration from main                       | Accepted |
+| [0021](0021-metadata-cache.md)                               | Metadata cache and a REST-only `describe_table`                    | Accepted |
 
 Current design: [docs/design.md](../design.md).

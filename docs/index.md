@@ -19,7 +19,7 @@ hero:
 features:
   - icon: 🔎
     title: Metadata discovery
-    details: Browse catalogs, schemas and tables, search by name or comment, and describe tables with keys, tags, samples and lineage.
+    details: Browse catalogs, schemas and tables, search by name or comment, and describe tables with columns, keys and owner.
   - icon: 🛡️
     title: Read-only by default
     details: Each statement is checked before it runs. Writes need an explicit switch, and the Unity Catalog permissions of the identity stay the real security boundary.

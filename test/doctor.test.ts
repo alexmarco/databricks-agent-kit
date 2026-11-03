@@ -34,6 +34,7 @@ const settings: Settings = {
   storageDir: "C:/tmp/dak",
   exportDir: "C:/tmp/dak/exports",
   exportMaxBytes: 10 * 1024 ** 3,
+  cacheTtlSeconds: 86_400,
   logLevel: "info",
 };
 
@@ -41,13 +42,13 @@ const auth: AuthProvider = {
   host: "https://ws",
   method: "oauth-u2m",
   profileWarehouseId: undefined,
+  cacheIdentity: "test-identity",
   getToken: async () => "t",
 };
 
 const DOWNLOAD_URL = "https://storage.example.net/chunk0?sig=secret-signature";
 
 interface Failures {
-  lineage?: boolean;
   informationSchema?: boolean;
   identity?: boolean;
   sqlExecution?: boolean;
@@ -108,8 +109,6 @@ function fakeStatements(failing: Failures = {}) {
     async submitServerSql(request) {
       submitted.push(request.statement);
       if (failing.sqlExecution && request.statement === "SELECT 1") throw new SqlError("[PERMISSION_DENIED] no");
-      if (request.statement.includes("table_lineage") && failing.lineage)
-        throw new SqlError("[TABLE_OR_VIEW_NOT_FOUND] system.access.table_lineage");
       if (request.statement.includes("information_schema") && failing.informationSchema)
         throw new SqlError("[PERMISSION_DENIED] no");
       return { statementId: "x", state: "SUCCEEDED" };
@@ -157,6 +156,7 @@ function deps(
     connect: async () => connection(client(failing), statements),
     runCli: async () => "Databricks CLI v1.21.0\n",
     openRepository: async () => ({ close: () => undefined }),
+    checkCache: async () => ({ schemaVersion: 1 }),
     fetch: async (url, init) => {
       recorder.fetchCalls.push({ url, init });
       return new Response("chunk", { status: 200 });
@@ -179,10 +179,10 @@ test("all checks pass on a healthy workspace", async () => {
       ["SQL warehouse", "ok"],
       ["SQL execution", "ok"],
       ["information_schema", "ok"],
-      ["Lineage system tables", "ok"],
       ["Result download", "ok"],
       ["Export directory", "ok"],
       ["Log storage", "ok"],
+      ["Metadata cache", "ok"],
       ["Databricks CLI", "ok"],
       ["Write mode", "ok"],
     ],
@@ -202,14 +202,7 @@ test("authentication failure fails and skips the remote checks with a next step"
   );
   assert.equal(byName(checks, "Authentication")!.status, "fail");
   assert.match(byName(checks, "Authentication")!.detail, /databricks auth login/);
-  for (const name of [
-    "Identity",
-    "SQL warehouse",
-    "SQL execution",
-    "information_schema",
-    "Lineage system tables",
-    "Result download",
-  ]) {
+  for (const name of ["Identity", "SQL warehouse", "SQL execution", "information_schema", "Result download"]) {
     assert.equal(byName(checks, name)!.status, "skip", name);
   }
   assert.match(byName(checks, "Result download")!.detail, /authentication failed/);
@@ -240,11 +233,7 @@ test("Result download is skipped when SQL execution fails", async () => {
 test("the probes are server-written SQL on the resolved warehouse", async () => {
   const fake = fakeStatements();
   await runDoctor(deps({ connect: async () => connection(client(), fake.statements) }));
-  assert.deepEqual(fake.submitted, [
-    "SELECT 1",
-    "SELECT 1 FROM system.information_schema.tables LIMIT 1",
-    "SELECT 1 FROM system.access.table_lineage LIMIT 1",
-  ]);
+  assert.deepEqual(fake.submitted, ["SELECT 1", "SELECT 1 FROM system.information_schema.tables LIMIT 1"]);
 });
 
 test("Result download submits SELECT 1 as a CSV export, awaits it and downloads the first link without headers", async () => {
@@ -403,12 +392,61 @@ test("the export directory check receives the configured directory", async () =>
 });
 
 test("optional features degrade to warnings, required ones fail", async () => {
-  const checks = await runDoctor(deps({}, undefined, { lineage: true, informationSchema: true, identity: true }));
+  const checks = await runDoctor(deps({}, undefined, { informationSchema: true, identity: true }));
   assert.equal(byName(checks, "Identity")!.status, "fail");
   assert.equal(byName(checks, "information_schema")!.status, "warn");
   assert.match(byName(checks, "information_schema")!.next ?? "", /search_metadata/);
-  assert.equal(byName(checks, "Lineage system tables")!.status, "warn");
-  assert.match(byName(checks, "Lineage system tables")!.next ?? "", /describe_table with lineage/);
+  assert.doesNotMatch(byName(checks, "information_schema")!.next ?? "", /describe_table|tags/);
+  assert.equal(byName(checks, "Lineage system tables"), undefined);
+});
+
+test("the cache check reports the file, its schema version and the effective TTL", async () => {
+  const paths: string[] = [];
+  const checks = await runDoctor(
+    deps({
+      checkCache: async (path) => {
+        paths.push(path);
+        return { schemaVersion: 1 };
+      },
+    }),
+  );
+  assert.deepEqual(paths, [join(settings.storageDir, "cache.db")]);
+  const cache = byName(checks, "Metadata cache")!;
+  assert.equal(cache.status, "ok");
+  assert.match(cache.detail, /cache\.db/);
+  assert.match(cache.detail, /schema version 1/);
+  assert.match(cache.detail, /TTL 86400 s/);
+});
+
+test("a cache that cannot be opened or written is a failed check with a next step", async () => {
+  const checks = await runDoctor(
+    deps({
+      checkCache: async () => {
+        throw new Error("file is not a database");
+      },
+    }),
+  );
+  const cache = byName(checks, "Metadata cache")!;
+  assert.equal(cache.status, "fail");
+  assert.match(cache.detail, /file is not a database/);
+  assert.match(cache.next ?? "", /DAK_STORAGE_DIR|delete/i);
+});
+
+test("the cache check says when the cache is disabled and opens nothing", async () => {
+  let opened = false;
+  const checks = await runDoctor(
+    deps({
+      settings: { ...settings, cacheTtlSeconds: 0 },
+      checkCache: async () => {
+        opened = true;
+        return { schemaVersion: 1 };
+      },
+    }),
+  );
+  const cache = byName(checks, "Metadata cache")!;
+  assert.equal(cache.status, "ok");
+  assert.match(cache.detail, /disabled.*DAK_CACHE_TTL=0/);
+  assert.equal(opened, false);
 });
 
 test("old or missing CLI, broken storage and write mode are reported", async () => {
@@ -466,10 +504,10 @@ test("ensureWritableDirectory creates the directory with mode 0700", {
 test("formatReport prints one line per check and a summary", async () => {
   const report = formatReport([
     { name: "Authentication", status: "ok", detail: "pat on https://ws" },
-    { name: "Lineage system tables", status: "warn", detail: "not available", next: "enable system tables" },
+    { name: "information_schema", status: "warn", detail: "not available", next: "enable system tables" },
   ]);
   assert.match(report, /^\[ok\]\s+Authentication: pat on https:\/\/ws$/m);
-  assert.match(report, /^\[warn\]\s+Lineage system tables: not available$/m);
+  assert.match(report, /^\[warn\]\s+information_schema: not available$/m);
   assert.match(report, /^\s+-> enable system tables$/m);
   assert.match(report, /1 ok, 1 warn, 0 fail, 0 skip/);
 });

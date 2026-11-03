@@ -41,20 +41,15 @@ export interface DoctorDependencies {
   connect(): Promise<DoctorConnection>;
   runCli(args: string[]): Promise<string>;
   openRepository(path: string): Promise<{ close(): void }>;
+  /** Opens `cache.db` to prove it is writable and returns its schema version; rejects when it is not usable. */
+  checkCache(path: string): Promise<{ schemaVersion: number }>;
   /** Plain `fetch`, used to download an export link exactly as the export manager does. */
   fetch: FetchLike;
   /** Creates the directory if needed, then writes and deletes a temporary file in it; throws when it is not writable. */
   ensureExportDir(dir: string): Promise<void>;
 }
 
-const REMOTE_CHECKS = [
-  "Identity",
-  "SQL warehouse",
-  "SQL execution",
-  "information_schema",
-  "Lineage system tables",
-  "Result download",
-] as const;
+const REMOTE_CHECKS = ["Identity", "SQL warehouse", "SQL execution", "information_schema", "Result download"] as const;
 const MIN_CLI = [1, 0, 0] as const;
 const DOWNLOAD_WAIT_BUDGET_MS = 60_000;
 const DOWNLOAD_TIMEOUT_MS = 15_000;
@@ -166,7 +161,7 @@ async function remoteChecks(
       detail: messageOf(error),
       next: "Set DATABRICKS_WAREHOUSE_ID or get CAN USE on a SQL warehouse.",
     });
-    for (const name of ["SQL execution", "information_schema", "Lineage system tables", "Result download"])
+    for (const name of ["SQL execution", "information_schema", "Result download"])
       checks.push({ name, status: "skip", detail: "no SQL warehouse" });
     return checks;
   }
@@ -202,19 +197,7 @@ async function remoteChecks(
       name: "information_schema",
       status: "warn",
       detail: messageOf(error),
-      next: "search_metadata and describe_table tags need SELECT on system.information_schema.",
-    });
-  }
-
-  try {
-    await probe(statements, "SELECT 1 FROM system.access.table_lineage LIMIT 1", warehouseId);
-    checks.push({ name: "Lineage system tables", status: "ok", detail: "system.access.table_lineage is readable" });
-  } catch (error) {
-    checks.push({
-      name: "Lineage system tables",
-      status: "warn",
-      detail: messageOf(error),
-      next: "describe_table with lineage needs Unity Catalog system tables (system.access) enabled and SELECT on them.",
+      next: "search_metadata needs SELECT on system.information_schema.",
     });
   }
 
@@ -255,9 +238,31 @@ async function cliCheck(deps: DoctorDependencies): Promise<DoctorCheck> {
   }
 }
 
+async function cacheCheck(deps: DoctorDependencies): Promise<DoctorCheck> {
+  const name = "Metadata cache";
+  const { cacheTtlSeconds, storageDir } = deps.settings;
+  if (cacheTtlSeconds === 0) return { name, status: "ok", detail: "disabled (DAK_CACHE_TTL=0)" };
+  const path = join(storageDir, "cache.db");
+  try {
+    const { schemaVersion } = await deps.checkCache(path);
+    return {
+      name,
+      status: "ok",
+      detail: `${path}, schema version ${schemaVersion}${schemaVersion === 0 ? " (new file)" : ""}, TTL ${cacheTtlSeconds} s`,
+    };
+  } catch (error) {
+    return {
+      name,
+      status: "fail",
+      detail: `${path}: ${messageOf(error)}`,
+      next: "Delete cache.db (it is rebuilt on use) or set DAK_STORAGE_DIR to a writable directory.",
+    };
+  }
+}
+
 /**
- * Checks authentication, identity, warehouse, SQL execution, information_schema, lineage system tables, result download,
- * export directory, log storage, the Databricks CLI and the write mode. Remote checks are skipped when an earlier one makes them meaningless.
+ * Checks authentication, identity, warehouse, SQL execution, information_schema, result download,
+ * export directory, log storage, the metadata cache, the Databricks CLI and the write mode. Remote checks are skipped when an earlier one makes them meaningless.
  */
 export async function runDoctor(deps: DoctorDependencies): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = [];
@@ -311,6 +316,7 @@ export async function runDoctor(deps: DoctorDependencies): Promise<DoctorCheck[]
     });
   }
 
+  checks.push(await cacheCheck(deps));
   checks.push(await cliCheck(deps));
   checks.push(
     deps.settings.allowWrites

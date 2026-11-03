@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMetadataService, quoteIdentifier } from "../src/metadata.ts";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
+import { createMetadataService } from "../src/metadata.ts";
+import { checkMetadataCache, openMetadataCache, type MetadataCache } from "../src/metadata-cache.ts";
+import { loadDatabaseSync } from "../src/sqlite.ts";
 import type { DatabricksClient, QueryValue } from "../src/client.ts";
 import { InvalidArgumentError } from "../src/errors.ts";
 import type { ExecuteSqlRequest, StatementLifecycle, StatementResult } from "../src/statements.ts";
@@ -50,12 +56,6 @@ const rowsResult = (columns: string[], rows: Array<Array<string | null>>): State
 });
 
 const noStatements = fakeStatements(() => new Error("unexpected SQL")).statements;
-
-test("quoteIdentifier backtick-quotes each part and escapes backticks", () => {
-  assert.equal(quoteIdentifier("my-cat.default.t`x"), "`my-cat`.`default`.`t``x`");
-  assert.throws(() => quoteIdentifier("a..b"), /Invalid/);
-  assert.throws(() => quoteIdentifier("a.b.c.d"), /Invalid/);
-});
 
 test("the service exposes only listObjects, describeTable and searchMetadata", () => {
   const metadata = createMetadataService(fakeClient({}).client, noStatements);
@@ -162,7 +162,7 @@ test("listObjects rejects a schema without a catalog", async () => {
   );
 });
 
-test("describeTable returns columns, constraints, clustering, partitions and tags", async () => {
+test("describeTable returns columns, constraints, clustering, partitions and audit fields from one REST call", async () => {
   const { client, calls } = fakeClient({
     "/api/2.1/unity-catalog/tables/main.sales.orders": {
       full_name: "main.sales.orders",
@@ -170,6 +170,11 @@ test("describeTable returns columns, constraints, clustering, partitions and tag
       data_source_format: "DELTA",
       comment: "One row per order",
       owner: "data-team",
+      view_definition: "SELECT 1",
+      created_at: Date.parse("2026-01-02T03:04:05.000Z"),
+      created_by: "creator@example.com",
+      updated_at: Date.parse("2026-10-11T12:13:14.000Z"),
+      updated_by: "updater@example.com",
       columns: [
         { name: "order_id", type_text: "bigint", nullable: false, comment: "PK" },
         { name: "customer_id", type_text: "bigint", nullable: true },
@@ -189,17 +194,8 @@ test("describeTable returns columns, constraints, clustering, partitions and tag
       properties: { clusteringColumns: '[["customer_id"]]', other: "x" },
     },
   });
-  const { statements, requests } = fakeStatements(() =>
-    rowsResult(
-      ["column_name", "tag_name", "tag_value"],
-      [
-        [null, "domain", "sales"],
-        ["customer_id", "pii", "true"],
-      ],
-    ),
-  );
+  const { statements, requests } = fakeStatements(() => new Error("unexpected SQL"));
   const table = await createMetadataService(client, statements).describeTable("main.sales.orders");
-  assert.equal(calls[0]!.path, "/api/2.1/unity-catalog/tables/main.sales.orders");
   assert.deepEqual(table, {
     fullName: "main.sales.orders",
     type: "MANAGED",
@@ -208,137 +204,31 @@ test("describeTable returns columns, constraints, clustering, partitions and tag
     owner: "data-team",
     columns: [
       { name: "order_id", type: "bigint", nullable: false, comment: "PK" },
-      { name: "customer_id", type: "bigint", nullable: true, comment: undefined, tags: { pii: "true" } },
+      { name: "customer_id", type: "bigint", nullable: true, comment: undefined },
       { name: "order_date", type: "date", nullable: true, comment: undefined },
     ],
     primaryKey: ["order_id"],
     foreignKeys: [{ columns: ["customer_id"], references: "main.sales.customers", referencedColumns: ["id"] }],
     clusteringColumns: ["customer_id"],
     partitionColumns: ["order_date"],
-    tags: { domain: "sales" },
+    createdAt: "2026-01-02T03:04:05.000Z",
+    createdBy: "creator@example.com",
+    updatedAt: "2026-10-11T12:13:14.000Z",
+    updatedBy: "updater@example.com",
   });
-  assert.equal(requests.length, 1);
-  assert.match(requests[0]!.statement, /information_schema\.table_tags/);
   assert.deepEqual(
-    requests[0]!.parameters?.map((parameter) => parameter.value),
-    ["main", "sales", "orders"],
+    calls.map((call) => call.path),
+    ["/api/2.1/unity-catalog/tables/main.sales.orders"],
   );
+  assert.equal(requests.length, 0, "no SQL statement is submitted");
 });
 
-test("describeTable still answers when tags are unavailable", async () => {
+test("describeTable leaves out the audit fields the API does not return", async () => {
   const { client } = fakeClient({ "/api/2.1/unity-catalog/tables/main.s.t": { full_name: "main.s.t", columns: [] } });
-  const { statements } = fakeStatements(() => new SqlError("[PERMISSION_DENIED] no access"));
-  const table = await createMetadataService(client, statements).describeTable("main.s.t");
-  assert.equal(table.fullName, "main.s.t");
-  assert.match(table.notes?.[0] ?? "", /Tags unavailable.*PERMISSION_DENIED/);
-});
-
-test("describeTable reports a tag read that did not finish instead of an empty tag list", async () => {
-  const { client } = fakeClient({ "/api/2.1/unity-catalog/tables/main.s.t": { full_name: "main.s.t", columns: [] } });
-  const { statements } = fakeStatements(
-    () => new SqlError("Statement did not finish in time (PENDING); the warehouse may be starting, retry in a moment."),
-  );
-  const table = await createMetadataService(client, statements).describeTable("main.s.t");
-  assert.equal(table.tags, undefined);
-  assert.match(table.notes?.[0] ?? "", /Tags unavailable.*did not finish/);
-});
-
-const tableRoute = { "/api/2.1/unity-catalog/tables/main.s.t": { full_name: "main.s.t", columns: [] } };
-
-function describeSql(request: ExecuteSqlRequest): StatementResult {
-  if (request.statement.includes("information_schema")) return rowsResult(["column_name", "tag_name", "tag_value"], []);
-  if (request.statement.includes("target_table_full_name = :table"))
-    return rowsResult(["table_name", "last_seen"], [["main.raw.orders", "2026-10-01"]]);
-  if (request.statement.includes("source_table_full_name = :table"))
-    return rowsResult(["table_name", "last_seen"], [["main.gold.revenue", "2026-10-02"]]);
-  return rowsResult(["a"], [["1"], ["2"]]);
-}
-
-test("describeTable adds a quoted, bounded sample and lineage on request", async () => {
-  const { statements, requests } = fakeStatements(describeSql);
-  const table = await createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", {
-    sampleRows: 2,
-    lineage: true,
+  assert.deepEqual(await createMetadataService(client, noStatements).describeTable("main.s.t"), {
+    fullName: "main.s.t",
+    columns: [],
   });
-  assert.deepEqual(table.sample?.rows, [["1"], ["2"]]);
-  assert.deepEqual(table.lineage, {
-    upstream: [{ table: "main.raw.orders", lastSeen: "2026-10-01" }],
-    downstream: [{ table: "main.gold.revenue", lastSeen: "2026-10-02" }],
-  });
-  assert.equal(table.notes, undefined);
-  const sample = requests.find((request) => request.statement.startsWith("SELECT *"));
-  assert.equal(sample?.statement, "SELECT * FROM `main`.`s`.`t` LIMIT 2");
-  assert.equal(sample?.rowLimit, 2);
-  assert.ok(requests.some((request) => request.statement.includes("system.access.table_lineage")));
-});
-
-test("describeTable caps the sample at 100 rows", async () => {
-  const { statements, requests } = fakeStatements(describeSql);
-  await createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", {
-    sampleRows: 5000,
-  });
-  assert.equal(
-    requests.find((request) => request.statement.startsWith("SELECT *"))?.statement,
-    "SELECT * FROM `main`.`s`.`t` LIMIT 100",
-  );
-});
-
-test("describeTable runs no sample or lineage query unless asked", async () => {
-  const { statements, requests } = fakeStatements(describeSql);
-  const table = await createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t");
-  assert.equal(table.sample, undefined);
-  assert.equal(table.lineage, undefined);
-  assert.equal(requests.length, 1);
-});
-
-test("describeTable reports unavailable lineage in notes instead of failing", async () => {
-  const { statements } = fakeStatements((request) =>
-    request.statement.includes("table_lineage")
-      ? new SqlError("[TABLE_OR_VIEW_NOT_FOUND] system.access.table_lineage (SQLSTATE 42P01)")
-      : describeSql(request),
-  );
-  const table = await createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", {
-    lineage: true,
-  });
-  assert.equal(table.lineage, undefined);
-  assert.match(table.notes?.join("\n") ?? "", /Lineage is unavailable.*system tables/s);
-});
-
-test("describeTable reports a failing sample in notes instead of failing", async () => {
-  const { statements } = fakeStatements((request) =>
-    request.statement.startsWith("SELECT *")
-      ? new SqlError("[INSUFFICIENT_PERMISSIONS] no SELECT")
-      : describeSql(request),
-  );
-  const table = await createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", {
-    sampleRows: 5,
-  });
-  assert.equal(table.sample, undefined);
-  assert.match(table.notes?.join("\n") ?? "", /Sample unavailable.*INSUFFICIENT_PERMISSIONS/);
-});
-
-test("describeTable reports a failed lineage statement in notes and keeps the description", async () => {
-  const { statements } = fakeStatements((request) =>
-    request.statement.includes("table_lineage")
-      ? new SqlError("Statement did not finish in time (RUNNING)")
-      : describeSql(request),
-  );
-  const table = await createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", {
-    lineage: true,
-  });
-  assert.equal(table.fullName, "main.s.t");
-  assert.equal(table.lineage, undefined);
-  assert.match(table.notes?.join("\n") ?? "", /Lineage unavailable: Statement did not finish in time/);
-});
-
-test("describeTable does not hide unexpected lineage failures", async () => {
-  const { statements } = fakeStatements((request) =>
-    request.statement.includes("table_lineage") ? new TypeError("boom") : describeSql(request),
-  );
-  await assert.rejects(
-    createMetadataService(fakeClient(tableRoute).client, statements).describeTable("main.s.t", { lineage: true }),
-    TypeError,
-  );
 });
 
 test("searchMetadata queries information_schema with a parameterized pattern", async () => {
@@ -379,4 +269,689 @@ test("searchMetadata surfaces a statement that did not finish instead of an empt
     createMetadataService(fakeClient({}).client, statements).searchMetadata({ query: "order" }),
     /did not finish/,
   );
+});
+
+const CACHE_START = Date.parse("2026-11-03T10:00:00.000Z");
+const MINUTE = 60_000;
+
+interface CacheContext {
+  /** Opens the cache of one identity on the shared `cache.db`; every cache is closed at the end of the test. */
+  open(options?: { identity?: string; ttlSeconds?: number }): Promise<MetadataCache>;
+  clock: { now: number };
+  /** Path of the shared `cache.db`. */
+  path: string;
+  /** Warnings the caches reported, as their messages. */
+  warnings: string[];
+}
+
+async function withCache(run: (context: CacheContext) => Promise<void>) {
+  const dir = await mkdtemp(join(tmpdir(), "dak-cache-"));
+  const clock = { now: CACHE_START };
+  const opened: MetadataCache[] = [];
+  const warnings: string[] = [];
+  const path = join(dir, "cache.db");
+  const open: CacheContext["open"] = async (options = {}) => {
+    const cache = await openMetadataCache({
+      path,
+      warn: (message) => warnings.push(message),
+      identity: options.identity ?? "identity-a",
+      ttlSeconds: options.ttlSeconds ?? 3600,
+      now: () => clock.now,
+    });
+    opened.push(cache);
+    return cache;
+  };
+  try {
+    await run({ open, clock, path, warnings });
+  } finally {
+    for (const cache of opened) cache.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+const cachedTableRoute = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+  "/api/2.1/unity-catalog/tables/main.s.t": { full_name: "main.s.t", columns: [], ...extra },
+});
+
+test("describeTable with a cache: the first call is a miss and the second a hit that makes no request", async () => {
+  await withCache(async ({ open, clock }) => {
+    const { client, calls } = fakeClient(cachedTableRoute({ comment: "Orders" }));
+    const metadata = createMetadataService(client, noStatements, await open());
+    const first = await metadata.describeTable("main.s.t");
+    assert.deepEqual(first.cache, { status: "miss", cachedAt: "2026-11-03T10:00:00.000Z" });
+    clock.now += 5 * MINUTE;
+    const second = await metadata.describeTable("main.s.t");
+    assert.deepEqual(second.cache, { status: "hit", cachedAt: "2026-11-03T10:00:00.000Z" });
+    assert.equal(calls.length, 1, "the hit makes no request to Databricks");
+    assert.deepEqual({ ...second, cache: undefined }, { ...first, cache: undefined });
+  });
+});
+
+test("describeTable with a cache: after the TTL the entry is reloaded as expired and replaced", async () => {
+  await withCache(async ({ open, clock }) => {
+    const { client, calls } = fakeClient(cachedTableRoute());
+    const metadata = createMetadataService(client, noStatements, await open({ ttlSeconds: 600 }));
+    await metadata.describeTable("main.s.t");
+    clock.now += 599_000;
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "hit");
+    clock.now += 1_000;
+    const expired = await metadata.describeTable("main.s.t");
+    assert.deepEqual(expired.cache, { status: "expired", cachedAt: "2026-11-03T10:10:00.000Z" });
+    assert.equal(calls.length, 2);
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "hit", "the reload replaced the entry");
+    assert.equal(calls.length, 2);
+  });
+});
+
+test("describeTable with a cache: a new TTL applies at once to the entries already stored", async () => {
+  await withCache(async ({ open, clock }) => {
+    const { client, calls } = fakeClient(cachedTableRoute());
+    await createMetadataService(client, noStatements, await open({ ttlSeconds: 86_400 })).describeTable("main.s.t");
+    clock.now += 30 * MINUTE;
+    const shorter = createMetadataService(client, noStatements, await open({ ttlSeconds: 600 }));
+    assert.equal((await shorter.describeTable("main.s.t")).cache?.status, "expired");
+    assert.equal(calls.length, 2);
+  });
+});
+
+test("describeTable with a cache: refresh reloads a fresh entry and replaces it", async () => {
+  await withCache(async ({ open, clock }) => {
+    const route = cachedTableRoute({ comment: "old" });
+    const { client, calls } = fakeClient(route);
+    const metadata = createMetadataService(client, noStatements, await open());
+    await metadata.describeTable("main.s.t");
+    route["/api/2.1/unity-catalog/tables/main.s.t"] = { full_name: "main.s.t", columns: [], comment: "new" };
+    clock.now += MINUTE;
+    const refreshed = await metadata.describeTable("main.s.t", { refresh: true });
+    assert.deepEqual(refreshed.cache, { status: "refreshed", cachedAt: "2026-11-03T10:01:00.000Z" });
+    assert.equal(refreshed.comment, "new");
+    assert.equal(calls.length, 2);
+    const next = await metadata.describeTable("main.s.t");
+    assert.equal(next.cache?.status, "hit");
+    assert.equal(next.comment, "new", "later lookups see the refreshed answer");
+  });
+});
+
+test("describeTable with a cache: refresh on a table never cached still loads and stores it", async () => {
+  await withCache(async ({ open }) => {
+    const { client, calls } = fakeClient(cachedTableRoute());
+    const metadata = createMetadataService(client, noStatements, await open());
+    assert.equal((await metadata.describeTable("main.s.t", { refresh: true })).cache?.status, "refreshed");
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "hit");
+    assert.equal(calls.length, 1);
+  });
+});
+
+test("the cache counts every reload as changed or unchanged by comparing the values", async () => {
+  await withCache(async ({ open, clock }) => {
+    const route = cachedTableRoute({ comment: "v1" });
+    const cache = await open({ ttlSeconds: 600 });
+    const metadata = createMetadataService(fakeClient(route).client, noStatements, cache);
+    await metadata.describeTable("main.s.t");
+    clock.now += 11 * MINUTE;
+    await metadata.describeTable("main.s.t"); // expired, same value
+    await metadata.describeTable("main.s.t", { refresh: true }); // refreshed, same value
+    route["/api/2.1/unity-catalog/tables/main.s.t"] = { full_name: "main.s.t", columns: [], comment: "v2" };
+    await metadata.describeTable("main.s.t", { refresh: true }); // refreshed, new value
+    await metadata.describeTable("main.s.t"); // hit
+    const entry = cache.entry("table", "main.s.t");
+    assert.equal(entry?.misses, 1);
+    assert.equal(entry?.expirations, 1);
+    assert.equal(entry?.refreshes, 2);
+    assert.equal(entry?.hits, 1);
+    assert.equal(entry?.reloadsUnchanged, 2);
+    assert.equal(entry?.reloadsChanged, 1);
+  });
+});
+
+test("describeTable with a cache: a table name in another case hits the same entry", async () => {
+  await withCache(async ({ open }) => {
+    const { client, calls } = fakeClient(cachedTableRoute());
+    const metadata = createMetadataService(client, noStatements, await open());
+    await metadata.describeTable("main.s.t");
+    assert.equal((await metadata.describeTable("MAIN.S.T")).cache?.status, "hit");
+    assert.equal((await metadata.describeTable("Main.S.t")).cache?.status, "hit");
+    assert.equal(calls.length, 1);
+  });
+});
+
+test("two cache identities on the same file keep separate entries and counters", async () => {
+  await withCache(async ({ open, clock }) => {
+    const { client, calls } = fakeClient(cachedTableRoute());
+    const first = await open({ identity: "identity-a" });
+    const second = await open({ identity: "identity-b" });
+    await createMetadataService(client, noStatements, first).describeTable("main.s.t");
+    assert.equal(second.entry("table", "main.s.t"), undefined, "the other identity sees nothing");
+    clock.now += MINUTE;
+    const otherMetadata = createMetadataService(client, noStatements, second);
+    assert.equal((await otherMetadata.describeTable("main.s.t")).cache?.status, "miss");
+    assert.equal(calls.length, 2, "the other identity had to load it");
+    assert.equal((await otherMetadata.describeTable("main.s.t")).cache?.status, "hit");
+    assert.equal(first.entry("table", "main.s.t")?.hits, 0);
+    assert.equal(second.entry("table", "main.s.t")?.hits, 1);
+  });
+});
+
+function flakyClient(route: Record<string, unknown>) {
+  const state = { failing: true, calls: 0 };
+  const client: DatabricksClient = {
+    host: "https://ws",
+    get: async <T>(path: string) => {
+      state.calls++;
+      if (state.failing) throw new Error("[PERMISSION_DENIED] revoked");
+      return route[path] as T;
+    },
+    post: async <T>() => ({}) as T,
+  };
+  return { client, state };
+}
+
+test("describeTable with a cache: a failed load is not stored", async () => {
+  await withCache(async ({ open }) => {
+    const cache = await open();
+    const { client, state } = flakyClient(cachedTableRoute());
+    const metadata = createMetadataService(client, noStatements, cache);
+    await assert.rejects(metadata.describeTable("main.s.t"), /PERMISSION_DENIED/);
+    assert.equal(cache.entry("table", "main.s.t"), undefined);
+    state.failing = false;
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "miss", "the table is found once it exists");
+  });
+});
+
+test("describeTable with a cache: a failed reload returns the error, never the old value", async () => {
+  await withCache(async ({ open, clock }) => {
+    const { client, state } = flakyClient(cachedTableRoute({ comment: "old" }));
+    const metadata = createMetadataService(client, noStatements, await open({ ttlSeconds: 600 }));
+    state.failing = false;
+    await metadata.describeTable("main.s.t");
+    state.failing = true;
+    clock.now += 11 * MINUTE;
+    await assert.rejects(metadata.describeTable("main.s.t"), /PERMISSION_DENIED/);
+    await assert.rejects(metadata.describeTable("main.s.t", { refresh: true }), /PERMISSION_DENIED/);
+    state.failing = false;
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "expired");
+  });
+});
+
+test("cache.db is readable only by its owner", { skip: process.platform === "win32" }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), "dak-cache-"));
+  const cache = await openMetadataCache({
+    path: join(dir, "nested", "cache.db"),
+    identity: "identity-a",
+    ttlSeconds: 60,
+  });
+  try {
+    assert.equal((await stat(join(dir, "nested", "cache.db"))).mode & 0o777, 0o600);
+    assert.equal((await stat(join(dir, "nested"))).mode & 0o777, 0o700);
+  } finally {
+    cache.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a corrupt cache.db is recreated and the call answers normally", async () => {
+  await withCache(async ({ open, path, warnings }) => {
+    await writeFile(path, "this is not a SQLite database, just text".repeat(100));
+    const { client } = fakeClient(cachedTableRoute());
+    const metadata = createMetadataService(client, noStatements, await open());
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "miss");
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "hit");
+    assert.equal(warnings.length, 0, "a recreated file is not a failure");
+  });
+});
+
+test("a cache.db with another schema version is recreated, so its entries are not served", async () => {
+  await withCache(async ({ open, path }) => {
+    const { client, calls } = fakeClient(cachedTableRoute());
+    const first = await open();
+    await createMetadataService(client, noStatements, first).describeTable("main.s.t");
+    first.close();
+    const Database = await loadDatabaseSync();
+    const upgraded = new Database(path);
+    upgraded.exec("PRAGMA user_version = 99");
+    upgraded.close();
+    const metadata = createMetadataService(client, noStatements, await open());
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "miss");
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "hit");
+    assert.equal(calls.length, 2);
+  });
+});
+
+/** Breaks the cache file from outside, as a damaged file would. */
+async function breakCacheFile(path: string) {
+  const Database = await loadDatabaseSync();
+  const other = new Database(path);
+  other.exec("DROP TABLE cache_entries");
+  other.close();
+}
+
+test("a cache that fails to read or write answers from Databricks as bypassed, with a warning", async () => {
+  await withCache(async ({ open, path, warnings }) => {
+    const { client, calls } = fakeClient(cachedTableRoute({ comment: "Orders" }));
+    const metadata = createMetadataService(client, noStatements, await open());
+    await metadata.describeTable("main.s.t");
+    await breakCacheFile(path);
+    const answer = await metadata.describeTable("main.s.t");
+    assert.equal(answer.cache?.status, "bypassed");
+    assert.equal(answer.comment, "Orders", "the answer is the one from Databricks");
+    assert.equal(calls.length, 2);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0] ?? "", /cache/i);
+  });
+});
+
+test("a bypassed answer is not counted in the entry counters", async () => {
+  await withCache(async ({ open, path, clock, warnings }) => {
+    const cache = await open({ ttlSeconds: 600 });
+    const metadata = createMetadataService(fakeClient(cachedTableRoute()).client, noStatements, cache);
+    await metadata.describeTable("main.s.t");
+    const Database = await loadDatabaseSync();
+    const other = new Database(path);
+    other.exec("CREATE TRIGGER no_update BEFORE UPDATE ON cache_entries BEGIN SELECT RAISE(ABORT, 'read-only'); END;");
+    other.close();
+    clock.now += 11 * MINUTE;
+    assert.equal(
+      (await metadata.describeTable("main.s.t")).cache?.status,
+      "bypassed",
+      "the entry could be read but not replaced",
+    );
+    assert.equal(warnings.length, 1);
+    const entry = cache.entry("table", "main.s.t");
+    assert.equal(entry?.expirations, 0);
+    assert.equal(entry?.reloadsUnchanged, 0);
+    assert.equal(entry?.misses, 1);
+  });
+});
+
+test("a cache that fails still returns the error of a failed load", async () => {
+  await withCache(async ({ open, path }) => {
+    const { client, state } = flakyClient(cachedTableRoute());
+    const metadata = createMetadataService(client, noStatements, await open());
+    await breakCacheFile(path);
+    await assert.rejects(metadata.describeTable("main.s.t"), /PERMISSION_DENIED/);
+    state.failing = false;
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "bypassed");
+  });
+});
+
+const listingRoutes = (
+  tables: unknown[] = tablesRoute["/api/2.1/unity-catalog/tables"].tables,
+): Record<string, unknown> => ({
+  "/api/2.1/unity-catalog/catalogs": { catalogs: [{ name: "main" }, { name: "samples" }] },
+  "/api/2.1/unity-catalog/schemas": { schemas: [{ name: "default" }, { name: "sales" }] },
+  "/api/2.1/unity-catalog/tables": { tables },
+});
+
+test("listObjects with a cache: a second call of the same level makes no request, whatever pattern and limit", async () => {
+  await withCache(async ({ open, clock }) => {
+    const { client, calls } = fakeClient(listingRoutes());
+    const metadata = createMetadataService(client, noStatements, await open());
+    const first = await metadata.listObjects({ catalog: "main", schema: "default", pattern: "ORDER*" });
+    assert.deepEqual(first.cache, { status: "miss", cachedAt: "2026-11-03T10:00:00.000Z" });
+    assert.deepEqual(
+      first.items.map((item) => item.name),
+      ["orders", "order_items"],
+    );
+    clock.now += MINUTE;
+    const second = await metadata.listObjects({ catalog: "main", schema: "default", pattern: "customers" });
+    assert.deepEqual(second.cache, { status: "hit", cachedAt: "2026-11-03T10:00:00.000Z" });
+    assert.deepEqual(
+      second.items.map((item) => item.name),
+      ["customers"],
+    );
+    const limited = await metadata.listObjects({ catalog: "main", schema: "default", limit: 2 });
+    assert.equal(limited.items.length, 2);
+    assert.equal(limited.truncated, true, "truncated is computed from the cached listing");
+    assert.equal(limited.cache?.status, "hit");
+    assert.equal(calls.length, 1, "one entry serves every pattern and limit");
+  });
+});
+
+test("listObjects with a cache: the three levels have separate entries and names in other case hit them", async () => {
+  await withCache(async ({ open }) => {
+    const { client, calls } = fakeClient(listingRoutes());
+    const metadata = createMetadataService(client, noStatements, await open());
+    for (const request of [{}, { catalog: "main" }, { catalog: "main", schema: "default" }]) {
+      assert.equal((await metadata.listObjects(request)).cache?.status, "miss", JSON.stringify(request));
+    }
+    assert.equal(calls.length, 3);
+    assert.equal((await metadata.listObjects({})).cache?.status, "hit");
+    assert.equal((await metadata.listObjects({ catalog: "MAIN" })).cache?.status, "hit");
+    assert.equal((await metadata.listObjects({ catalog: "Main", schema: "DEFAULT" })).cache?.status, "hit");
+    assert.equal(calls.length, 3);
+  });
+});
+
+test("listObjects with a cache: the pages are loaded once and the answer equals the one without a cache", async () => {
+  await withCache(async ({ open }) => {
+    const pages = () => [
+      { catalogs: [{ name: "main", comment: "Main" }], next_page_token: "p2" },
+      { catalogs: [{ name: "samples" }] },
+    ];
+    const cached = fakeClient({ "/api/2.1/unity-catalog/catalogs": pages() });
+    const metadata = createMetadataService(cached.client, noStatements, await open());
+    await metadata.listObjects({});
+    const hit = await metadata.listObjects({});
+    assert.equal(cached.calls.length, 2, "two pages, once");
+    const uncached = await createMetadataService(
+      fakeClient({ "/api/2.1/unity-catalog/catalogs": pages() }).client,
+      noStatements,
+    ).listObjects({});
+    assert.deepEqual(JSON.parse(JSON.stringify({ ...hit, cache: undefined })), JSON.parse(JSON.stringify(uncached)));
+  });
+});
+
+test("listObjects with a cache: refresh reloads the whole listing and replaces the entry", async () => {
+  await withCache(async ({ open, clock }) => {
+    const routes = listingRoutes();
+    const { client, calls } = fakeClient(routes);
+    const metadata = createMetadataService(client, noStatements, await open());
+    await metadata.listObjects({ catalog: "main", schema: "default" });
+    routes["/api/2.1/unity-catalog/tables"] = { tables: [{ name: "brand_new", table_type: "MANAGED" }] };
+    clock.now += MINUTE;
+    const refreshed = await metadata.listObjects({ catalog: "main", schema: "default", refresh: true });
+    assert.deepEqual(refreshed.cache, { status: "refreshed", cachedAt: "2026-11-03T10:01:00.000Z" });
+    assert.deepEqual(
+      refreshed.items.map((item) => item.name),
+      ["brand_new"],
+    );
+    const next = await metadata.listObjects({ catalog: "main", schema: "default" });
+    assert.equal(next.cache?.status, "hit");
+    assert.deepEqual(
+      next.items.map((item) => item.name),
+      ["brand_new"],
+    );
+    assert.equal(calls.length, 2);
+  });
+});
+
+test("listObjects with a cache: expiry, failed loads and a failing cache behave as for describeTable", async () => {
+  await withCache(async ({ open, clock, path, warnings }) => {
+    const { client, calls } = fakeClient(listingRoutes());
+    const metadata = createMetadataService(client, noStatements, await open({ ttlSeconds: 600 }));
+    await metadata.listObjects({ catalog: "main" });
+    clock.now += 11 * MINUTE;
+    assert.equal((await metadata.listObjects({ catalog: "main" })).cache?.status, "expired");
+    assert.equal(calls.length, 2);
+    await breakCacheFile(path);
+    const bypassed = await metadata.listObjects({ catalog: "main" });
+    assert.equal(bypassed.cache?.status, "bypassed");
+    assert.deepEqual(
+      bypassed.items.map((item) => item.name),
+      ["default", "sales"],
+    );
+    assert.equal(warnings.length, 1);
+  });
+});
+
+test("listObjects with a cache: a failed load is not stored", async () => {
+  await withCache(async ({ open }) => {
+    const cache = await open();
+    const { client, state } = flakyClient(listingRoutes());
+    const metadata = createMetadataService(client, noStatements, cache);
+    await assert.rejects(metadata.listObjects({ catalog: "main" }), /PERMISSION_DENIED/);
+    assert.equal(cache.entry("listing", "main"), undefined);
+    state.failing = false;
+    assert.equal((await metadata.listObjects({ catalog: "main" })).cache?.status, "miss");
+  });
+});
+
+test("listObjects still rejects a schema without a catalog when a cache is in use", async () => {
+  await withCache(async ({ open }) => {
+    const metadata = createMetadataService(fakeClient({}).client, noStatements, await open());
+    await assert.rejects(metadata.listObjects({ schema: "s" }), InvalidArgumentError);
+  });
+});
+
+/** A client whose requests take a known time on the injected clock: 40 ms for a table, 100 ms for the catalogs. */
+function timedClient(clock: { now: number }, routes: Record<string, unknown>): DatabricksClient {
+  return {
+    host: "https://ws",
+    get: async <T>(path: string) => {
+      clock.now += path.endsWith("/catalogs") ? 100 : 40;
+      return routes[path] as T;
+    },
+    post: async <T>() => ({}) as T,
+  };
+}
+
+/** table: miss, hit x3, refresh. listing (catalogs): miss, hit x3. One minute passes between calls. */
+async function runKnownSequence(metadata: ReturnType<typeof createMetadataService>, clock: { now: number }) {
+  const step = () => (clock.now += MINUTE);
+  await metadata.describeTable("main.s.t");
+  for (let call = 0; call < 3; call++) {
+    step();
+    await metadata.describeTable("main.s.t");
+  }
+  step();
+  await metadata.describeTable("main.s.t", { refresh: true });
+  step();
+  await metadata.listObjects({});
+  for (let call = 0; call < 3; call++) {
+    step();
+    await metadata.listObjects({});
+  }
+}
+
+test("the cache statistics match a known sequence of calls", async () => {
+  await withCache(async ({ open, clock }) => {
+    const cache = await open();
+    const client = timedClient(clock, { ...listingRoutes(), ...cachedTableRoute() });
+    await runKnownSequence(createMetadataService(client, noStatements, cache), clock);
+    assert.deepEqual(cache.stats(), {
+      total: {
+        entries: 2,
+        hits: 6,
+        misses: 2,
+        expirations: 0,
+        refreshes: 1,
+        reloadsChanged: 0,
+        reloadsUnchanged: 1,
+        hitRatio: 0.75,
+        timeSavedMs: 420,
+        oldestLoadedAt: "2026-11-03T10:00:00.040Z",
+      },
+      byKind: {
+        table: {
+          entries: 1,
+          hits: 3,
+          misses: 1,
+          expirations: 0,
+          refreshes: 1,
+          reloadsChanged: 0,
+          reloadsUnchanged: 1,
+          hitRatio: 0.75,
+          timeSavedMs: 120,
+          oldestLoadedAt: "2026-11-03T10:00:00.040Z",
+        },
+        listing: {
+          entries: 1,
+          hits: 3,
+          misses: 1,
+          expirations: 0,
+          refreshes: 0,
+          reloadsChanged: 0,
+          reloadsUnchanged: 0,
+          hitRatio: 0.75,
+          timeSavedMs: 300,
+          oldestLoadedAt: "2026-11-03T10:05:00.180Z",
+        },
+      },
+    });
+  });
+});
+
+test("the cache statistics of an empty cache are zero with no ratio and no date", async () => {
+  await withCache(async ({ open }) => {
+    const empty = {
+      entries: 0,
+      hits: 0,
+      misses: 0,
+      expirations: 0,
+      refreshes: 0,
+      reloadsChanged: 0,
+      reloadsUnchanged: 0,
+      hitRatio: null,
+      timeSavedMs: 0,
+      oldestLoadedAt: null,
+    };
+    assert.deepEqual((await open()).stats(), { total: empty, byKind: { table: empty, listing: empty } });
+  });
+});
+
+test("an entry reports its counters, times and last load duration", async () => {
+  await withCache(async ({ open, clock }) => {
+    const cache = await open({ ttlSeconds: 600 });
+    await runKnownSequence(
+      createMetadataService(timedClient(clock, { ...listingRoutes(), ...cachedTableRoute() }), noStatements, cache),
+      clock,
+    );
+    assert.deepEqual(cache.entry("table", "MAIN.S.T"), {
+      cachedAt: "2026-11-03T10:04:00.080Z",
+      expiresAt: "2026-11-03T10:14:00.080Z",
+      lastUsedAt: "2026-11-03T10:04:00.080Z",
+      lastLoadMs: 40,
+      hits: 3,
+      misses: 1,
+      expirations: 0,
+      refreshes: 1,
+      reloadsChanged: 0,
+      reloadsUnchanged: 1,
+    });
+    assert.equal(cache.entry("listing", "")?.hits, 3, "the catalogs listing has the empty key");
+    assert.equal(cache.entry("table", "main.s.missing"), undefined);
+  });
+});
+
+test("reading the statistics does not change the counters", async () => {
+  await withCache(async ({ open, clock }) => {
+    const cache = await open();
+    await runKnownSequence(
+      createMetadataService(timedClient(clock, { ...listingRoutes(), ...cachedTableRoute() }), noStatements, cache),
+      clock,
+    );
+    const before = { stats: cache.stats(), entry: cache.entry("table", "main.s.t") };
+    cache.stats();
+    cache.entry("table", "main.s.t");
+    assert.deepEqual({ stats: cache.stats(), entry: cache.entry("table", "main.s.t") }, before);
+  });
+});
+
+test("statistics and entries are limited to the cache identity", async () => {
+  await withCache(async ({ open, clock }) => {
+    const mine = await open({ identity: "identity-a" });
+    const other = await open({ identity: "identity-b" });
+    await runKnownSequence(
+      createMetadataService(timedClient(clock, { ...listingRoutes(), ...cachedTableRoute() }), noStatements, mine),
+      clock,
+    );
+    assert.equal(other.stats().total.entries, 0);
+    assert.equal(other.stats().total.hits, 0);
+    assert.equal(other.entry("table", "main.s.t"), undefined);
+    assert.equal(mine.stats().total.entries, 2);
+  });
+});
+
+test("bypassed answers are not counted in the statistics", async () => {
+  await withCache(async ({ open, path, clock }) => {
+    const cache = await open({ ttlSeconds: 600 });
+    const metadata = createMetadataService(fakeClient(cachedTableRoute()).client, noStatements, cache);
+    await metadata.describeTable("main.s.t");
+    const Database = await loadDatabaseSync();
+    const other = new Database(path);
+    other.exec("CREATE TRIGGER no_update BEFORE UPDATE ON cache_entries BEGIN SELECT RAISE(ABORT, 'read-only'); END;");
+    other.close();
+    clock.now += 11 * MINUTE;
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "bypassed");
+    const { total } = cache.stats();
+    assert.deepEqual([total.misses, total.expirations, total.hits, total.refreshes], [1, 0, 0, 0]);
+  });
+});
+
+const DAY = 86_400_000;
+
+test("the purge deletes entries unused for more than 30 days, of every identity, and keeps the rest", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  await withCache(async ({ open, clock }) => {
+    const { client } = fakeClient({ ...listingRoutes(), ...cachedTableRoute() });
+    const mine = await open({ identity: "identity-a", ttlSeconds: 90 * 86_400 });
+    const other = await open({ identity: "identity-b", ttlSeconds: 90 * 86_400 });
+    await createMetadataService(client, noStatements, mine).describeTable("main.s.t");
+    await createMetadataService(client, noStatements, mine).listObjects({});
+    await createMetadataService(client, noStatements, other).describeTable("main.s.t");
+    clock.now += 20 * DAY;
+    assert.equal((await createMetadataService(client, noStatements, mine).listObjects({})).cache?.status, "hit");
+    clock.now += 11 * DAY; // table: 31 days unused; catalogs: 11 days since its last use
+    const reopened = await open({ identity: "identity-a", ttlSeconds: 90 * 86_400 });
+    assert.equal(reopened.entry("table", "main.s.t"), undefined, "unused for 31 days");
+    assert.equal(other.entry("table", "main.s.t"), undefined, "the purge is not limited to one identity");
+    assert.notEqual(reopened.entry("listing", ""), undefined, "a read renewed its last use");
+  });
+});
+
+test("an entry unused for exactly 30 days is kept", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  await withCache(async ({ open, clock }) => {
+    const first = await open({ ttlSeconds: 90 * 86_400 });
+    await createMetadataService(fakeClient(cachedTableRoute()).client, noStatements, first).describeTable("main.s.t");
+    clock.now += 30 * DAY;
+    assert.notEqual((await open()).entry("table", "main.s.t"), undefined);
+    clock.now += 1;
+    assert.equal((await open()).entry("table", "main.s.t"), undefined);
+  });
+});
+
+test("the purge also runs every 24 hours, and closing the cache stops the timer", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  await withCache(async ({ open, clock, warnings }) => {
+    const cache = await open({ ttlSeconds: 90 * 86_400 });
+    await createMetadataService(fakeClient(cachedTableRoute()).client, noStatements, cache).describeTable("main.s.t");
+    clock.now += 31 * DAY;
+    t.mock.timers.tick(DAY);
+    assert.equal(cache.entry("table", "main.s.t"), undefined, "the timer purged it");
+    cache.close();
+    t.mock.timers.tick(3 * DAY);
+    assert.deepEqual(warnings, [], "no purge runs after close");
+  });
+});
+
+test("a purge that fails is a warning and the timer keeps running", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  await withCache(async ({ open, path, warnings }) => {
+    await open();
+    await breakCacheFile(path);
+    t.mock.timers.tick(DAY);
+    t.mock.timers.tick(DAY);
+    assert.equal(warnings.length, 2);
+    assert.match(warnings[0] ?? "", /purge/i);
+  });
+});
+
+test("the purge timer does not keep the process alive", () => {
+  const script = `
+    const { openMetadataCache } = await import(${JSON.stringify(new URL("../src/metadata-cache.ts", import.meta.url).href)});
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    await openMetadataCache({ path: join(mkdtempSync(join(tmpdir(), "dak-unref-")), "cache.db"), identity: "x", ttlSeconds: 60 });
+    console.log("opened");
+  `;
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+    encoding: "utf8",
+    timeout: 15_000,
+  });
+  assert.equal(child.status, 0, `the process exits by itself: ${child.stderr}`);
+  assert.match(child.stdout, /opened/);
+});
+
+test("checkMetadataCache reports the schema version of a healthy file and rejects one that is not a database", async () => {
+  await withCache(async ({ open, path }) => {
+    assert.deepEqual(await checkMetadataCache(path), { schemaVersion: 0 }, "a file that does not exist yet is empty");
+    await open();
+    assert.deepEqual(await checkMetadataCache(path), { schemaVersion: 1 });
+  });
+  await withCache(async ({ path }) => {
+    await writeFile(path, "this is not a SQLite database".repeat(100));
+    await assert.rejects(checkMetadataCache(path), /not a database/);
+  });
 });

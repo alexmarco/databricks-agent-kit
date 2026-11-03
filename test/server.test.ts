@@ -4,15 +4,16 @@ import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { AuthError } from "../src/errors.ts";
 import { createMcpServer, TOOL_NAMES, type ServerDependencies } from "../src/server.ts";
-import { fakeServices, okResult, withLogs } from "./helpers.ts";
+import { FAKE_CACHE_STATS, fakeServices, okResult, withLogs } from "./helpers.ts";
 import type { LogRepository } from "../src/logging/repository.ts";
 import type { LogService } from "../src/logging/service.ts";
 
 async function connect(
   context: { repository: LogRepository; logs: LogService },
   overrides: Partial<ServerDependencies> = {},
+  options: { cache?: boolean } = {},
 ) {
-  const services = fakeServices(context.logs);
+  const services = fakeServices(context.logs, options);
   const server = createMcpServer({
     ...services,
     logs: context.logs,
@@ -234,16 +235,122 @@ test("metadata tools delegate to the metadata service", async () => {
       JSON.parse(text(await connection.client.callTool({ name, arguments: args })));
     assert.equal((await call("list_objects", {})).level, "catalogs");
     assert.deepEqual((await call("list_objects", { catalog: "main" })).items, [{ name: "main-schema" }]);
-    const described = await call("describe_table", { full_name: "main.s.t", sample_rows: 5, lineage: true });
+    const described = await call("describe_table", { full_name: "main.s.t" });
     assert.equal(described.fullName, "main.s.t");
-    assert.deepEqual(described.sample.rows, [["1"]]);
-    assert.deepEqual(described.lineage, { upstream: [], downstream: [] });
     assert.equal((await call("search_metadata", { query: "orders" }))[0].table, "orders");
-    const tooMany = await connection.client.callTool({
+    await closeAll(connection);
+  });
+});
+
+test("describe_table no longer accepts sample_rows or lineage and passes only the table name and refresh on", async () => {
+  await withLogs("stdio", async (context) => {
+    const connection = await connect(context);
+    const result = await connection.client.callTool({
       name: "describe_table",
-      arguments: { full_name: "main.s.t", sample_rows: 101 },
+      arguments: { full_name: "main.s.t", sample_rows: 5, lineage: true },
     });
-    assert.equal(tooMany.isError, true);
+    assert.equal(result.isError, undefined);
+    const described = JSON.parse(text(result));
+    assert.equal(described.sample, undefined);
+    assert.equal(described.lineage, undefined);
+    assert.deepEqual(
+      connection.services.describeCalls.map(([name, options]) => [name, (options as { refresh?: boolean }).refresh]),
+      [["main.s.t", undefined]],
+    );
+    const { tools } = await connection.client.listTools();
+    const describeTool = tools.find((tool) => tool.name === "describe_table");
+    assert.deepEqual(Object.keys(describeTool?.inputSchema.properties ?? {}), ["full_name", "refresh"]);
+    assert.doesNotMatch(describeTool?.description ?? "", /tag|sample|lineage/i);
+    assert.doesNotMatch(connection.client.getInstructions() ?? "", /tag|sample|lineage/i);
+    await closeAll(connection);
+  });
+});
+
+test("list_objects passes refresh to the metadata service and its description tells about it", async () => {
+  await withLogs("stdio", async (context) => {
+    const connection = await connect(context);
+    await connection.client.callTool({ name: "list_objects", arguments: { catalog: "main", refresh: true } });
+    await connection.client.callTool({ name: "list_objects", arguments: { catalog: "main" } });
+    assert.deepEqual(
+      connection.services.listCalls.map((call) => call.refresh),
+      [true, undefined],
+    );
+    const { tools } = await connection.client.listTools();
+    assert.match(tools.find((tool) => tool.name === "list_objects")?.description ?? "", /refresh/);
+    await closeAll(connection);
+  });
+});
+
+test("describe_table passes refresh to the metadata service and its description tells about it", async () => {
+  await withLogs("stdio", async (context) => {
+    const connection = await connect(context);
+    await connection.client.callTool({ name: "describe_table", arguments: { full_name: "main.s.t", refresh: true } });
+    const [name, options] = connection.services.describeCalls[0] ?? [];
+    assert.equal(name, "main.s.t");
+    assert.equal((options as { refresh?: boolean }).refresh, true);
+    const { tools } = await connection.client.listTools();
+    assert.match(tools.find((tool) => tool.name === "describe_table")?.description ?? "", /refresh/);
+    assert.match(connection.client.getInstructions() ?? "", /refresh/);
+    await closeAll(connection);
+  });
+});
+
+test("the cache resources give the statistics and one entry of the current identity", async () => {
+  await withLogs("stdio", async (context) => {
+    const connection = await connect(context);
+    const read = async (uri: string) =>
+      JSON.parse(resourceText((await connection.client.readResource({ uri })).contents));
+    assert.deepEqual(await read("resource://cache/stats"), { enabled: true, ...FAKE_CACHE_STATS });
+    const entry = { enabled: true, cachedAt: "2026-11-03T10:00:00.000Z", hits: 3, lastLoadMs: 40 };
+    assert.deepEqual(await read("resource://cache/entry/table/Main.S.T"), { ...entry, kind: "table", key: "Main.S.T" });
+    assert.deepEqual(await read("resource://cache/entry/listing/main.default"), {
+      ...entry,
+      kind: "listing",
+      key: "main.default",
+    });
+    assert.deepEqual(await read("resource://cache/entry/listing/"), { ...entry, kind: "listing", key: "" });
+    await closeAll(connection);
+  });
+});
+
+test("a cache entry that is not cached answers NOT_FOUND", async () => {
+  await withLogs("stdio", async (context) => {
+    const connection = await connect(context);
+    await assert.rejects(
+      connection.client.readResource({ uri: "resource://cache/entry/table/main.s.missing" }),
+      /No cache entry for table 'main.s.missing'/,
+    );
+    await assert.rejects(
+      connection.client.readResource({ uri: "resource://cache/entry/listing/other" }),
+      /No cache entry for listing 'other'/,
+    );
+    await closeAll(connection);
+  });
+});
+
+test("with the cache disabled the cache resources say so", async () => {
+  await withLogs("stdio", async (context) => {
+    const connection = await connect(context, {}, { cache: false });
+    for (const uri of [
+      "resource://cache/stats",
+      "resource://cache/entry/table/main.s.t",
+      "resource://cache/entry/listing/main.default",
+      "resource://cache/entry/listing/",
+    ]) {
+      const payload = JSON.parse(resourceText((await connection.client.readResource({ uri })).contents));
+      assert.equal(payload.enabled, false, uri);
+      assert.match(payload.message, /disabled.*DAK_CACHE_TTL=0/);
+    }
+    await closeAll(connection);
+  });
+});
+
+test("the instructions point to the cache resources", async () => {
+  await withLogs("stdio", async (context) => {
+    const connection = await connect(context);
+    const instructions = connection.client.getInstructions() ?? "";
+    assert.match(instructions, /resource:\/\/cache\/stats/);
+    assert.match(instructions, /resource:\/\/cache\/entry\//);
     await closeAll(connection);
   });
 });

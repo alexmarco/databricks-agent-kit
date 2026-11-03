@@ -2,24 +2,25 @@
 
 `dak` is one package with one binary. It runs as an MCP server on your machine, either over stdio for one session or as a
 shared Streamable HTTP server. It has no backend of its own: it calls the public Databricks REST APIs with the identity you
-configure, and it keeps its logs and exports on local disk.
+configure, and it keeps its logs, a cache of metadata answers and its exports on local disk.
 
 ![How dak connects a coding agent to Databricks](/diagrams/overview.svg)
 
 ## Components
 
-![Inside the dak process, the MCP surface feeds the statement lifecycle, the metadata queries and the log store; the lifecycle and the metadata queries call the Databricks REST APIs with the token, the export manager downloads chunks from cloud storage without it and writes the export directory, and the log store writes logs.db](/diagrams/architecture-components.svg)
+![Inside the dak process, the MCP surface feeds the statement lifecycle, the metadata queries and the log store; the metadata queries go through the metadata cache, which keeps its answers in cache.db and calls the Databricks REST APIs with the token on a miss; the lifecycle also calls them with the token, the export manager downloads chunks from cloud storage without it and writes the export directory, and the log store writes logs.db](/diagrams/architecture-components.svg)
 
-| Component           | Responsibility                                                                                                |
-| ------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Transport           | Carries MCP over stdio, or over Streamable HTTP with loopback and token protections                           |
-| MCP surface         | The five tools and five resources. Every tool call is recorded as an execution                                |
-| Statement lifecycle | Builds each statement, applies the read-only check, submits it, waits, cancels and shapes the bounded result  |
-| Export manager      | Submits an export, downloads its chunks from the presigned links and writes the files                         |
-| Metadata queries    | Catalogs, schemas, tables, columns, tags, samples and lineage, through `information_schema` and Unity Catalog |
-| Warehouse selection | Chooses the warehouse: explicit, configured, or the remembered automatic choice                               |
-| Authentication      | Resolves the credentials and keeps the token fresh; tokens never leave memory                                 |
-| Log store           | Queues log events and writes them to SQLite in batches                                                        |
+| Component           | Responsibility                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Transport           | Carries MCP over stdio, or over Streamable HTTP with loopback and token protections                          |
+| MCP surface         | The five tools and the resources. Every tool call is recorded as an execution                                |
+| Statement lifecycle | Builds each statement, applies the read-only check, submits it, waits, cancels and shapes the bounded result |
+| Export manager      | Submits an export, downloads its chunks from the presigned links and writes the files                        |
+| Metadata queries    | Catalogs, schemas, tables and columns through the Unity Catalog API, and search through `information_schema` |
+| Metadata cache      | Keeps `describe_table` and `list_objects` answers in `cache.db`, so a fresh entry needs no request           |
+| Warehouse selection | Chooses the warehouse: explicit, configured, or the remembered automatic choice                              |
+| Authentication      | Resolves the credentials and keeps the token fresh; tokens never leave memory                                |
+| Log store           | Queues log events and writes them to SQLite in batches                                                       |
 
 ## Sequence of an export
 

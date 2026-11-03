@@ -113,14 +113,14 @@ the token automatically.
 
 ### Permissions to grant
 
-| Capability                                  | Required                                                                                   |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Any SQL tool                                | `CAN USE` on a SQL warehouse                                                               |
-| Read data                                   | `USE CATALOG`, `USE SCHEMA` and `SELECT` on the objects                                    |
-| `search_metadata`, tags in `describe_table` | Read access to `system.information_schema` (it only shows objects the identity can access) |
-| `describe_table` with `lineage`             | Unity Catalog system tables (`system.access`) enabled by an admin, plus `SELECT` on them   |
-| Exports (`export` of `execute_sql`)         | Nothing beyond the privileges to read the data (see below for the local requirements)      |
-| Writes (`--allow-writes`)                   | `MODIFY` and the DDL privileges you intend to allow                                        |
+| Capability                          | Required                                                                                   |
+| ----------------------------------- | ------------------------------------------------------------------------------------------ |
+| Any SQL tool                        | `CAN USE` on a SQL warehouse                                                               |
+| Read data                           | `USE CATALOG`, `USE SCHEMA` and `SELECT` on the objects                                    |
+| `search_metadata`                   | Read access to `system.information_schema` (it only shows objects the identity can access) |
+| `describe_table`, `list_objects`    | Access to the objects in Unity Catalog; they need no SQL warehouse                         |
+| Exports (`export` of `execute_sql`) | Nothing beyond the privileges to read the data (see below for the local requirements)      |
+| Writes (`--allow-writes`)           | `MODIFY` and the DDL privileges you intend to allow                                        |
 
 Exports need no extra Databricks privilege, but the workspace must allow `EXTERNAL_LINKS` results, this machine must
 reach the cloud-storage hosts of the result links, and the server needs a writable export directory (see
@@ -143,9 +143,10 @@ principal, or a user or group used only for agents) with just what they need:
 dak doctor --profile dev
 ```
 
-It checks authentication, identity, warehouse, `SELECT 1`, `information_schema`, lineage system tables, result download,
-export directory, log storage, the Databricks CLI version and the write mode, and prints the next step for anything that
-fails. Exit code 1 means at least one required check failed.
+It checks authentication, identity, warehouse, `SELECT 1`, `information_schema` (used by `search_metadata`), result
+download, export directory, log storage, the metadata cache (it opens and is writable, its schema version and TTL), the
+Databricks CLI version and the write mode, and prints the next step for anything that fails. Exit code 1 means at least
+one required check failed.
 
 - **Result download** submits `SELECT 1` as a CSV export and downloads its first chunk from the presigned link without
   credentials, exactly as an export does. It waits up to 60 s for a stopped warehouse to start. It only warns (it never
@@ -222,27 +223,41 @@ Clients point at the URL, for example `claude mcp add --transport http databrick
 
 Five tools keep the definitions under 2,500 characters in total, so they cost little context in every session.
 
-| Tool              | Parameters                                                                                  | Purpose                                                                                                                                    |
-| ----------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `list_objects`    | `catalog?`, `schema?`, `pattern?`, `limit?`                                                 | Without arguments, catalogs; with `catalog`, its schemas; with `catalog` and `schema`, its tables. `pattern` is a substring or glob        |
-| `describe_table`  | `full_name`, `sample_rows?`, `lineage?`                                                     | Columns, comments, primary/foreign keys, clustering, partitioning and tags; optional sample (max 100 rows) and upstream/downstream lineage |
-| `search_metadata` | `query`, `catalog?`, `limit?`                                                               | Find tables and columns by name or comment                                                                                                 |
-| `execute_sql`     | `statement`, `parameters?`, `catalog?`, `schema?`, `row_limit?`, `warehouse_id?`, `export?` | One statement with `:name` parameters and bounded results; with `export`, the full result goes to a file                                   |
-| `get_statement`   | `statement_id`, `wait_seconds?`, `cancel?`                                                  | Follow up on a statement still running after 30 s or on an export (`wait_seconds` from 0 to 30), or cancel it with `cancel: true`          |
+| Tool              | Parameters                                                                                  | Purpose                                                                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_objects`    | `catalog?`, `schema?`, `pattern?`, `limit?`, `refresh?`                                     | Without arguments, catalogs; with `catalog`, its schemas; with `catalog` and `schema`, its tables. `pattern` is a substring or glob. Cached                                 |
+| `describe_table`  | `full_name`, `refresh?`                                                                     | Columns, comments, primary/foreign keys, clustering, partitioning, owner and created/updated time and user. One Unity Catalog API call: it never starts a warehouse. Cached |
+| `search_metadata` | `query`, `catalog?`, `limit?`                                                               | Find tables and columns by name or comment                                                                                                                                  |
+| `execute_sql`     | `statement`, `parameters?`, `catalog?`, `schema?`, `row_limit?`, `warehouse_id?`, `export?` | One statement with `:name` parameters and bounded results; with `export`, the full result goes to a file                                                                    |
+| `get_statement`   | `statement_id`, `wait_seconds?`, `cancel?`                                                  | Follow up on a statement still running after 30 s or on an export (`wait_seconds` from 0 to 30), or cancel it with `cancel: true`                                           |
 
 Details that the table leaves out:
 
 - `list_objects` returns `truncated` when more objects matched than `limit` (default 100, maximum 500). `schema`
   without `catalog` is an error. `search_metadata` returns 50 matches by default (maximum 200).
-- `describe_table` reports a sample or lineage that could not be read in `notes` instead of failing. Lineage comes from
-  `system.access.table_lineage` (see [Permissions to grant](#permissions-to-grant)).
+- `describe_table` makes one Unity Catalog API call and no SQL statement, so it works with no running warehouse. It does not
+  return tags, a data sample or lineage: ask for a sample with `execute_sql`.
+- `describe_table` and `list_objects` answer from the metadata cache (`cache.db` in the storage directory) while the entry
+  is fresh, with no request to Databricks. A listing is cached whole, one entry per level (catalogs, the schemas of a
+  catalog, the tables of a schema), so a second `list_objects` of the same level makes no request whatever its `pattern`
+  and `limit`. The `cache` field gives the `status` (`hit`, `miss`, `expired`, `refreshed` or `bypassed`, when the cache
+  failed and the answer came straight from Databricks) and `cachedAt`, the time the answer was loaded. `refresh: true`
+  skips the entry and replaces it with the current answer; use it after changing a table or schema. Entries are fresh for `DAK_CACHE_TTL` seconds (24 hours by default; `0` disables
+  the cache and the `cache` field) and are kept apart for each credential. An error from Databricks is never cached and
+  never replaced by an old answer.
 - `parameters` is a list of `{ name, value, type? }`; the value is sent through the API, never interpolated into the SQL.
 
 Resource `resource://databricks/warehouses` lists the SQL warehouses visible to the identity and marks the default one.
 
-Suggested workflow for data questions (it replaces Genie): `search_metadata` or `list_objects` -> `describe_table` (use
-`sample_rows` for a quick look at the data) -> `execute_sql`. Aggregate in SQL when the result is large, or pass `export`
-to write the full result to a file. The better your Unity Catalog comments, tags and keys, the better the agent's SQL.
+Resources `resource://cache/stats` and `resource://cache/entry/table/{full_name}` or `resource://cache/entry/listing/{path}`
+(the empty path, `resource://cache/entry/listing/`, is the catalogs) show how well the metadata cache works for the
+identity of the server: entries, hits, misses, expirations, refreshes, reloads with and without changes, `hitRatio`
+(`hits / (hits + misses + expirations)`) and `timeSavedMs` (each entry's hits times the duration of its last load). A
+missing entry answers `NOT_FOUND`, and with `DAK_CACHE_TTL=0` they report `enabled: false`. Reading them changes no counter.
+
+Suggested workflow for data questions (it replaces Genie): `search_metadata` or `list_objects` -> `describe_table` ->
+`execute_sql` (a `SELECT ... LIMIT` gives a quick look at the data). Aggregate in SQL when the result is large, or pass
+`export` to write the full result to a file. The better your Unity Catalog comments and keys, the better the agent's SQL.
 
 ### SQL safety and limits
 
@@ -445,6 +460,7 @@ There is no log search tool, so the log costs no context until an agent reads on
 | Log storage      | -                   | `DAK_STORAGE_DIR`                                     | Per-user state directory             |
 | Export directory | -                   | `DAK_EXPORT_DIR`                                      | `<log storage>/exports`              |
 | Export size cap  | -                   | `DAK_EXPORT_MAX_BYTES`                                | `10737418240` (10 GiB)               |
+| Cache TTL        | -                   | `DAK_CACHE_TTL`                                       | `86400` seconds; `0` disables it     |
 | Log level        | -                   | `DAK_LOG_LEVEL`                                       | `info`                               |
 
 ## Troubleshooting
@@ -458,7 +474,6 @@ There is no log search tool, so the log costs no context until an agent reads on
 | `No SQL warehouse is accessible`                                               | Set `DATABRICKS_WAREHOUSE_ID` or get `CAN USE` on a warehouse                                                                                                                |
 | `Read-only mode: ...`                                                          | Expected; restart with `--allow-writes` only if writes are intended. If the statement starts with a comment, remove it; pass literals that contain `;` as `:name` parameters |
 | `Read-only check did not finish ...` or `Statement did not finish in time ...` | The warehouse is starting; retry in a moment                                                                                                                                 |
-| `Lineage is unavailable`                                                       | Lineage system tables are not enabled or not readable in this workspace                                                                                                      |
 | Statement still `RUNNING`                                                      | The warehouse is starting; call `get_statement` (use `wait_seconds`)                                                                                                         |
 | `Export <path> already exists; choose another name.`                           | Choose another `name`, or delete the old export; the new statement was cancelled                                                                                             |
 | Export `FAILED`: `chunk N download failed (...)`                               | The result links could not be downloaded: run `dak doctor` and check **Result download**; allow the cloud-storage host in the proxy or firewall                              |

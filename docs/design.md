@@ -1,6 +1,6 @@
 # databricks-agent-kit - Design
 
-Status: approved for implementation (2026-10-18); revised and implemented 2026-10-19 with result export, a minimal tool surface and a logging policy. Decisions: [adr](adr/README.md).
+Status: approved for implementation (2026-10-18); revised and implemented 2026-10-19 with result export, a minimal tool surface and a logging policy; revised 2026-11-03 with the metadata cache and a REST-only `describe_table` (ADR 0021, implemented 2026-11-03). Decisions: [adr](adr/README.md).
 
 ## 1. Goal
 
@@ -22,7 +22,7 @@ Skills are out of scope for the code: the official installer (`databricks aitool
 
 ## 2. Architecture
 
-![On the local machine, the coding agent calls dak mcp through MCP tools and resources; dak mcp writes logs.db in batches, writes result chunks to DAK_EXPORT_DIR and gets the U2M token from the Databricks CLI; it calls the Databricks workspace REST APIs and downloads from cloud storage through presigned URLs without the token](./public/diagrams/design-architecture.svg)
+![On the local machine, the coding agent calls dak mcp through MCP tools and resources; dak mcp writes logs.db in batches, keeps cached metadata in cache.db, writes result chunks to DAK_EXPORT_DIR and gets the U2M token from the Databricks CLI; it calls the Databricks workspace REST APIs and downloads from cloud storage through presigned URLs without the token](./public/diagrams/design-architecture.svg)
 
 One package, one binary (`dak`):
 
@@ -39,9 +39,8 @@ Only public workspace REST APIs, called with native `fetch` (no Databricks SDK d
 | ------------------------------------------------------------------------- | --------------------------------------------------------- |
 | `POST/GET /api/2.0/sql/statements`, `.../cancel`, `.../result/chunks/{n}` | SQL execution (Statement Execution API) and result chunks |
 | `GET /api/2.0/sql/warehouses`                                             | Warehouse discovery and default selection                 |
-| `GET /api/2.1/unity-catalog/catalogs\|schemas\|tables`                    | Metadata, columns, comments, constraints                  |
-| `system.information_schema.*` (via SQL)                                   | Search by name/comment, tags                              |
-| `system.access.table_lineage` (via SQL)                                   | Lineage (optional feature)                                |
+| `GET /api/2.1/unity-catalog/catalogs\|schemas\|tables`                    | Metadata, columns, comments, constraints, change times    |
+| `system.information_schema.*` (via SQL)                                   | Search by name/comment                                    |
 | Presigned URLs from `EXTERNAL_LINKS` (cloud storage)                      | Export downloads, sent without an `Authorization` header  |
 
 ### 3.1 Authentication
@@ -64,15 +63,17 @@ Tokens are cached in memory until shortly before expiry. Secrets are never logge
 
 Kept small to limit context cost (ADR 0006). The 12 tools of the first implementation cost about 1155 tokens of definitions (4944 characters of JSON); the five tools take under 2500 characters, a budget that the tests assert. To fit it, the `$schema` URI that `zod` adds to every input schema is stripped.
 
-| Tool              | Input                                                                                       | Output                                                                                                                                     |
-| ----------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `list_objects`    | `catalog?`, `schema?`, `pattern?`, `limit?`                                                 | Catalogs, schemas or tables (name, type, comment) depending on the arguments; `truncated`                                                  |
-| `describe_table`  | `full_name`, `sample_rows?`, `lineage?`                                                     | Table comment/type/owner, columns (type, nullable, comment), PK/FK constraints, clustering/partitioning, tags; optional sample and lineage |
-| `search_metadata` | `query`, `catalog?`, `limit?`                                                               | Tables and columns whose name or comment matches (information_schema)                                                                      |
-| `execute_sql`     | `statement`, `parameters?`, `catalog?`, `schema?`, `row_limit?`, `warehouse_id?`, `export?` | Columns, rows, row count, `truncated`, `statement_id`; or `statement_id` + state if still running; with `export`, the export descriptor    |
-| `get_statement`   | `statement_id`, `wait_seconds?`, `cancel?`                                                  | State, then result when finished; progress and files for an export; `wait_seconds` (0 to 30) waits before answering; cancels when asked    |
+| Tool              | Input                                                                                       | Output                                                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_objects`    | `catalog?`, `schema?`, `pattern?`, `limit?`, `refresh?`                                     | Catalogs, schemas or tables (name, type, comment) depending on the arguments; `truncated`; `cache`                                                         |
+| `describe_table`  | `full_name`, `refresh?`                                                                     | Table comment/type/format/owner, columns (type, nullable, comment), PK/FK constraints, clustering/partitioning, created and updated time and user; `cache` |
+| `search_metadata` | `query`, `catalog?`, `limit?`                                                               | Tables and columns whose name or comment matches (information_schema)                                                                                      |
+| `execute_sql`     | `statement`, `parameters?`, `catalog?`, `schema?`, `row_limit?`, `warehouse_id?`, `export?` | Columns, rows, row count, `truncated`, `statement_id`; or `statement_id` + state if still running; with `export`, the export descriptor                    |
+| `get_statement`   | `statement_id`, `wait_seconds?`, `cancel?`                                                  | State, then result when finished; progress and files for an export; `wait_seconds` (0 to 30) waits before answering; cancels when asked                    |
 
 The server sends MCP `instructions` and tool descriptions stating that these tools take precedence over the Databricks CLI for SQL and metadata.
+
+`list_objects` and `describe_table` use only the Unity Catalog REST API and never start a warehouse; their answers come from the metadata cache (4.7). A sample of the data is a query for `execute_sql`.
 
 ### 4.2 Resources
 
@@ -83,6 +84,9 @@ The server sends MCP `instructions` and tool descriptions stating that these too
 | `resource://logs/executions/recent`       | `{ executions[] }`                              |
 | `resource://logs/execution/{executionId}` | `{ execution, logs[] }`                         |
 | `resource://logs/stats`                   | `{ last24h: { executions, errors, warnings } }` |
+| `resource://cache/stats`                  | Cache totals of the current identity, by kind   |
+| `resource://cache/entry/table/{fullName}` | One cached table description and its counters   |
+| `resource://cache/entry/listing/{path}`   | One cached listing and its counters             |
 
 ### 4.3 SQL execution rules
 
@@ -138,21 +142,35 @@ For results too large for the agent's context (ADR 0003). `execute_sql` accepts 
 - Limits: `DAK_EXPORT_MAX_BYTES` (sent as `byte_limit`; a result cut at the limit ends `SUCCEEDED` with `truncated: true`); jobs live in the process and are not resumed after a restart; finished exports are never deleted; partitioning by column is not offered. At startup `cleanupOrphanedParts` removes `.part` files and directories of the export directory that were last modified more than 24 hours earlier; it needs no credentials, so it does not wait for the first tool call.
 - `dak doctor` checks that a result chunk can be downloaded (a `SELECT 1` export, submitted and awaited through the statement lifecycle module like a real export, with the wait bounded to 60 s) and that the export directory is writable.
 
+### 4.7 Metadata cache
+
+ADR 0021. The **metadata cache** keeps the answers of `describe_table` and `list_objects` in `cache.db`, so repeated lookups make no request to Databricks. Terms are in GLOSSARY.md.
+
+- **Entries.** Two kinds: `table`, keyed by the lowercase full name and holding the description, and `listing`, keyed by the lowercase level path (empty for catalogs, `catalog` for schemas, `catalog.schema` for tables) and holding the full listing of that level. `list_objects` applies `pattern` and `limit` to the cached listing.
+- **Freshness.** Fixed TTL, 24 h by default (`DAK_CACHE_TTL`), computed at read time from the load time. A fresh entry is served without a request; an expired one is loaded again and replaced; `refresh: true` forces the reload. Each reload counts whether the value changed. Errors are not cached and a failed reload returns the error, never the stale value. Writes through `execute_sql` invalidate nothing.
+- **Answer.** Each cached answer carries `cache: { status, cachedAt }`, with the status `hit`, `miss`, `expired`, `refreshed` or `bypassed`; the status is also on the final log entry of the call. With the cache disabled (`DAK_CACHE_TTL=0`) the field is absent.
+- **Identity.** Each entry belongs to a cache identity: a local SHA-256 of host, authentication method and the credential that identifies the principal (PAT token, M2M `client_id`, U2M profile name), provided by the resolved credentials of the workspace session. HTTP clients share the server's single identity, and so its entries.
+- **Storage.** `<DAK_STORAGE_DIR>/cache.db`, `node:sqlite`, WAL, `synchronous=NORMAL`, `busy_timeout=5000`, owner-only outside Windows. One `WITHOUT ROWID` table keyed by (identity, kind, key) with the JSON value, the first and last load times, the last use, the duration of the last load and the counters (hits, misses, expirations, refreshes, reloads with and without changes), and an index on the last use. `PRAGMA user_version` versions the schema; a file with another version, or one that cannot be opened, is recreated. Entries unused for 30 days are purged at startup and every 24 h on an unreferenced timer.
+- **Failures.** The cache never fails a tool call: on a read or write error the call goes to Databricks, answers with `bypassed` and logs a `warn`.
+- **Statistics.** `resource://cache/stats` sums the live entries of the current identity by kind: entries, hits, misses, expirations, refreshes, reloads with and without changes, hit ratio (`hits / (hits + misses + expirations)`), estimated time saved (hits times the last load duration) and the first load of the oldest entry. `resource://cache/entry/table/{full_name}` and `resource://cache/entry/listing/{path}` (the empty path, `resource://cache/entry/listing/`, is the catalogs) give one entry with its counters, `cachedAt`, `expiresAt`, `lastUsedAt` and last load duration. `bypassed` answers are counted only in the log.
+- **Doctor.** `dak doctor` checks that `cache.db` opens and is writable, its schema version and the effective TTL, and reports a disabled cache.
+
 ## 5. Configuration
 
-| Setting           | Flag                | Environment                       | Default                     |
-| ----------------- | ------------------- | --------------------------------- | --------------------------- |
-| Profile           | `--profile`         | `DATABRICKS_CONFIG_PROFILE`       | `DEFAULT`                   |
-| Warehouse         | -                   | `DATABRICKS_WAREHOUSE_ID`         | automatic                   |
-| Allow writes      | `--allow-writes`    | `DAK_ALLOW_WRITES`                | `false`                     |
-| Max rows          | -                   | `DAK_MAX_ROWS`                    | `1000`                      |
-| Transport         | `--transport`       | -                                 | `stdio`                     |
-| HTTP host / port  | `--host` / `--port` | `DAK_HTTP_HOST` / `DAK_HTTP_PORT` | `127.0.0.1` / `8765`        |
-| HTTP token        | -                   | `DAK_HTTP_TOKEN`                  | required off-loopback       |
-| Storage directory | -                   | `DAK_STORAGE_DIR`                 | per-user state directory    |
-| Export directory  | -                   | `DAK_EXPORT_DIR`                  | `<state directory>/exports` |
-| Export size cap   | -                   | `DAK_EXPORT_MAX_BYTES`            | 10 GiB                      |
-| Log level         | -                   | `DAK_LOG_LEVEL`                   | `info`                      |
+| Setting           | Flag                | Environment                       | Default                                 |
+| ----------------- | ------------------- | --------------------------------- | --------------------------------------- |
+| Profile           | `--profile`         | `DATABRICKS_CONFIG_PROFILE`       | `DEFAULT`                               |
+| Warehouse         | -                   | `DATABRICKS_WAREHOUSE_ID`         | automatic                               |
+| Allow writes      | `--allow-writes`    | `DAK_ALLOW_WRITES`                | `false`                                 |
+| Max rows          | -                   | `DAK_MAX_ROWS`                    | `1000`                                  |
+| Transport         | `--transport`       | -                                 | `stdio`                                 |
+| HTTP host / port  | `--host` / `--port` | `DAK_HTTP_HOST` / `DAK_HTTP_PORT` | `127.0.0.1` / `8765`                    |
+| HTTP token        | -                   | `DAK_HTTP_TOKEN`                  | required off-loopback                   |
+| Storage directory | -                   | `DAK_STORAGE_DIR`                 | per-user state directory                |
+| Export directory  | -                   | `DAK_EXPORT_DIR`                  | `<state directory>/exports`             |
+| Export size cap   | -                   | `DAK_EXPORT_MAX_BYTES`            | 10 GiB                                  |
+| Log level         | -                   | `DAK_LOG_LEVEL`                   | `info`                                  |
+| Cache TTL         | -                   | `DAK_CACHE_TTL`                   | `86400` seconds; `0` disables the cache |
 
 The per-user state directory is `%LOCALAPPDATA%\databricks-agent-kit` on Windows and `$XDG_STATE_HOME/databricks-agent-kit` (default `~/.local/state/databricks-agent-kit`) elsewhere. A relative `DAK_EXPORT_DIR` is resolved against the working directory of the server process; the settings reject non-positive or non-numeric `DAK_EXPORT_MAX_BYTES`.
 
@@ -238,7 +256,9 @@ databricks-agent-kit/
     statement-lookup.ts   # get_statement: one answer for any statement id, export or plain (ADR 0011)
     execution-scope.ts    # execution scope: open an execution, run work in it, the single final entry and status (ADR 0013)
     warehouses.ts         # warehouse selection: explicit, configured and automatic choice, listing (ADR 0012)
-    metadata.ts           # catalogs, schemas, tables, search, lineage
+    metadata.ts           # catalogs, schemas, tables, search
+    metadata-cache.ts     # metadata cache: entries in cache.db, TTL, statistics (ADR 0021)
+    sqlite.ts             # loads node:sqlite without its experimental warning
     export/               # background export jobs: chunk download, csv, parquet, sqlite
     logging/              # log service, queue, batch writer, repository, uuid v7, argument description, rate limiter
     server.ts             # MCP tools, resources, transports
@@ -265,12 +285,12 @@ The README is a summary of the documentation site in `docs/`, which takes preced
 
 ## 9. Verification strategy
 
-| Level       | What                                                                                                                                                                                                                        | How                                                                     |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Unit        | Read-only check, config/profile parsing, auth selection, result shaping, error mapping, UUID v7, queue/flush, repository, purge, SQLite type mapping, ordered CSV concatenation, atomic rename, name sanitizing, log levels | `node --test`, written test-first; `fetch` stubbed at the HTTP boundary |
-| End to end  | MCP client spawns `dak mcp` over stdio and connects over HTTP against a local stub of the Databricks REST API and a presigned-URL origin: list tools/resources, `execute_sql`, exports, cancellation, an error path         | MCP client SDK in `node:test`                                           |
-| Integration | Real workspace: auth, warehouse selection, SQL, metadata, lineage or its "unsupported" message, multi-chunk CSV, Arrow to Parquet with `NULL`, `DATE`, `BINARY` and `MAP`, `byte_count` against the downloaded size         | Gated by `DAK_IT_PROFILE`; skipped otherwise                            |
-| Agent       | Claude Code / OpenCode answer a data question using MCP tool calls                                                                                                                                                          | Manual run, documented in the README                                    |
+| Level       | What                                                                                                                                                                                                                                   | How                                                                     |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Unit        | Read-only check, config/profile parsing, auth selection, result shaping, error mapping, UUID v7, queue/flush, repository, purge, SQLite type mapping, ordered CSV concatenation, atomic rename, name sanitizing, log levels            | `node --test`, written test-first; `fetch` stubbed at the HTTP boundary |
+| End to end  | MCP client spawns `dak mcp` over stdio and connects over HTTP against a local stub of the Databricks REST API and a presigned-URL origin: list tools/resources, `execute_sql`, exports, cancellation, an error path                    | MCP client SDK in `node:test`                                           |
+| Integration | Real workspace: auth, warehouse selection, SQL, metadata and its cache (miss, hit, refresh, no warehouse started), multi-chunk CSV, Arrow to Parquet with `NULL`, `DATE`, `BINARY` and `MAP`, `byte_count` against the downloaded size | Gated by `DAK_IT_PROFILE`; skipped otherwise                            |
+| Agent       | Claude Code / OpenCode answer a data question using MCP tool calls                                                                                                                                                                     | Manual run, documented in the README                                    |
 
 ## 10. Delivery pipeline
 
