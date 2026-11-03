@@ -8,28 +8,7 @@ Examples use a profile named `dev`, as in the [quickstart](/guide/quickstart). I
 - **stdio**: the agent starts one `dak` process per session. Nothing is listening on the network.
 - **Streamable HTTP**: one server runs on your machine and every agent connects to its URL.
 
-```mermaid
-flowchart LR
-  subgraph stdio["stdio: one process per session"]
-    direction TB
-    a1["Agent session 1"] --> p1["dak process"]
-    a2["Agent session 2"] --> p2["dak process"]
-  end
-  subgraph http["Streamable HTTP: one shared server"]
-    direction TB
-    b1["Agent session 1"] --> s["dak server"]
-    b2["Agent session 2"] --> s
-  end
-  p1 & p2 --> dbx1[("Databricks")]
-  s --> dbx2[("Databricks")]
-
-  classDef agentStyle fill:#F1EBFF,stroke:#7A4FD6,color:#1F2937
-  classDef serverStyle fill:#E8F1FF,stroke:#2F6FDB,color:#1F2937
-  classDef workspaceStyle fill:#E6F7EE,stroke:#1E9E62,color:#1F2937
-  class a1,a2,b1,b2 agentStyle
-  class p1,p2,s serverStyle
-  class dbx1,dbx2 workspaceStyle
-```
+![With stdio each agent session starts its own dak process; with Streamable HTTP every session connects to one shared dak server](/diagrams/agents-transports.svg)
 
 Use stdio unless you need one shared server, for example to keep one log view across several agents or to run the server
 on a remote machine behind a proxy.
