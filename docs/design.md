@@ -324,3 +324,4 @@ Decisions and rationale: [ADR 0017](adr/0017-documentation-site-on-github-pages.
 - `.github/workflows/docs.yml` builds the VitePress site from `docs/` (`npm run docs:build`) on pull requests into `develop` and `main`.
 - A push to `main` builds the site again and deploys it to GitHub Pages through the `github-pages` environment. It does not depend on a release, so the site shows the current state of `main`.
 - `GLOSSARY.md` and the root `README.md` are not published. `docs/research/` is excluded from the build.
+- Diagrams are Excalidraw sources in `docs/diagrams-src/`, rendered by `scripts/render-diagrams.mjs` to SVG files committed in `docs/public/diagrams/`. Sequence diagrams stay in Mermaid. Decisions: [ADR 0018](adr/0018-excalidraw-diagrams-rendered-to-svg.md).
