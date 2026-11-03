@@ -15,13 +15,13 @@ before they expire, and are sent only to the workspace host. They never appear i
 
 ## Choose a method
 
-| | OAuth through the CLI | Personal access token | OAuth M2M, service principal |
-| --- | --- | --- | --- |
-| Best for | Personal use on your machine | Quick tests, when tokens are allowed | Unattended runs and shared HTTP servers |
-| Admin needed | No | Only if the workspace admin allows tokens | Yes, to create the principal and its secret |
-| Renewal | The CLI refreshes; after the refresh token expires, log in again | Rotate by hand before it expires | Automatic |
-| Who the agent acts as | You | You | The service principal |
-| Recommended for agents | Yes, with a dedicated read-only identity if you can | Acceptable for tests | Yes, ideally read-only |
+|                        | OAuth through the CLI                                            | Personal access token                     | OAuth M2M, service principal                |
+| ---------------------- | ---------------------------------------------------------------- | ----------------------------------------- | ------------------------------------------- |
+| Best for               | Personal use on your machine                                     | Quick tests, when tokens are allowed      | Unattended runs and shared HTTP servers     |
+| Admin needed           | No                                                               | Only if the workspace admin allows tokens | Yes, to create the principal and its secret |
+| Renewal                | The CLI refreshes; after the refresh token expires, log in again | Rotate by hand before it expires          | Automatic                                   |
+| Who the agent acts as  | You                                                              | You                                       | The service principal                       |
+| Recommended for agents | Yes, with a dedicated read-only identity if you can              | Acceptable for tests                      | Yes, ideally read-only                      |
 
 ## Option A: OAuth through the Databricks CLI
 
@@ -83,14 +83,14 @@ and refreshes the token automatically.
 
 ## Privileges by capability
 
-| Capability | Required |
-| --- | --- |
-| Any SQL tool | `CAN USE` on a SQL warehouse |
-| Read data | `USE CATALOG`, `USE SCHEMA` and `SELECT` on the objects |
-| `search_metadata`, tags in `describe_table` | Read access to `system.information_schema`, which shows only objects the identity can access |
-| `describe_table` with `lineage` | Unity Catalog system tables (`system.access`) enabled by an admin, plus `SELECT` on them |
-| Exports (`export` of `execute_sql`) | Nothing beyond the privileges to read the data. The workspace must allow `EXTERNAL_LINKS` results, the machine must reach the cloud-storage hosts, and the export directory must be writable |
-| Writes (`--allow-writes`) | `MODIFY` and the DDL privileges you intend to allow |
+| Capability                                  | Required                                                                                                                                                                                     |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Any SQL tool                                | `CAN USE` on a SQL warehouse                                                                                                                                                                 |
+| Read data                                   | `USE CATALOG`, `USE SCHEMA` and `SELECT` on the objects                                                                                                                                      |
+| `search_metadata`, tags in `describe_table` | Read access to `system.information_schema`, which shows only objects the identity can access                                                                                                 |
+| `describe_table` with `lineage`             | Unity Catalog system tables (`system.access`) enabled by an admin, plus `SELECT` on them                                                                                                     |
+| Exports (`export` of `execute_sql`)         | Nothing beyond the privileges to read the data. The workspace must allow `EXTERNAL_LINKS` results, the machine must reach the cloud-storage hosts, and the export directory must be writable |
+| Writes (`--allow-writes`)                   | `MODIFY` and the DDL privileges you intend to allow                                                                                                                                          |
 
 ::: warning The identity is the security boundary
 Neither the Statement Execution API nor MCP offers a read-only mode. MCP tool annotations are only hints for the client.

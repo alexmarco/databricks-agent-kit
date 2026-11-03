@@ -23,14 +23,14 @@ Each `<name>.excalidraw` renders to `docs/public/diagrams/<name>.svg`. This fold
 - **Groups:** a dashed panel with its title above it, 28 in `#1e1e1e`, and an optional subtitle inside.
 - **Palette** (stroke / fill):
 
-  | Role | Stroke | Fill |
-  | --- | --- | --- |
-  | Agent | `#7A4FD6` | `#F1EBFF` |
-  | dak, running states, data | `#2F6FDB` | `#E8F1FF` |
-  | Databricks, success | `#1E9E62` | `#E6F7EE` |
+  | Role                          | Stroke    | Fill      |
+  | ----------------------------- | --------- | --------- |
+  | Agent                         | `#7A4FD6` | `#F1EBFF` |
+  | dak, running states, data     | `#2F6FDB` | `#E8F1FF` |
+  | Databricks, success           | `#1E9E62` | `#E6F7EE` |
   | Checks, cloud storage, cancel | `#E07B00` | `#FFF4E5` |
-  | Risk, failure, rejection | `#C81E1E` | `#FDE8E8` |
-  | Local stores | `#6B7280` | `#FFFFFF` |
+  | Risk, failure, rejection      | `#C81E1E` | `#FDE8E8` |
+  | Local stores                  | `#6B7280` | `#FFFFFF` |
 
 - **Width:** about 1000 units at most. The docs column is about 690 px wide, so a wider diagram shrinks its text.
 - **Representation:** pick the shape that fits the idea: an ordered rule list for ordered checks, nesting for

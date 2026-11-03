@@ -13,13 +13,13 @@ This ADR settles the interface of the first slice: plain (inline) statements and
 
 A new module, the **statement lifecycle** (`src/statements.ts`, `createStatementLifecycle`), owns everything that happens to a statement after a caller has a request for it: building the request body, the read-only policy, submitting, polling, cancelling and shaping a bounded inline result. It is the only module that builds the statements path. Its interface:
 
-| Method                                       | Behaviour                                                                                                                                                           |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `submit(request, origin, diagnostics?)`      | Submits a statement inline and returns the shaped result, or its id and state while it is still running                                                              |
-| `query(request)`                             | Runs server-written SQL that must finish: a statement still running after the wait is cancelled (best effort) and reported as an error                              |
-| `submitExport(request, format, diagnostics?)` | Submits a statement as `EXTERNAL_LINKS` for the export manager and returns its id and warehouse without waiting                                                    |
-| `get(statementId, { rowLimit?, waitSeconds? })` | Fetches a statement; with `waitSeconds` polls until it is no longer `PENDING` or `RUNNING` or the wait is spent                                                    |
-| `cancel(statementId)`                        | Cancels a statement                                                                                                                                                 |
+| Method                                          | Behaviour                                                                                                                              |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `submit(request, origin, diagnostics?)`         | Submits a statement inline and returns the shaped result, or its id and state while it is still running                                |
+| `query(request)`                                | Runs server-written SQL that must finish: a statement still running after the wait is cancelled (best effort) and reported as an error |
+| `submitExport(request, format, diagnostics?)`   | Submits a statement as `EXTERNAL_LINKS` for the export manager and returns its id and warehouse without waiting                        |
+| `get(statementId, { rowLimit?, waitSeconds? })` | Fetches a statement; with `waitSeconds` polls until it is no longer `PENDING` or `RUNNING` or the wait is spent                        |
+| `cancel(statementId)`                           | Cancels a statement                                                                                                                    |
 
 - **The origin keeps the read-only policy explicit without near-identical methods.** `origin` is `"agent"` or `"server"`. Statements from the agent (`execute_sql`, and exports, which are always the agent's) go through the policy of ADR 0008 unless writes are allowed; statements the server writes itself (metadata queries, doctor probes) skip it. The policy is implemented once, in the module, so a new entry point cannot forget it. `query` is server-written SQL by definition; it is a method of its own because its contract differs (it never returns an unfinished statement), not because of the policy.
 - **The module has one polling schedule per use**, owned by it: `get` waits 1 s, 2 s, 3 s... up to the requested wait (0 to 30 s). The export manager (10 s cap) and the doctor (5 s cap, 60 s budget) keep their own loops until their slices move them here.
@@ -29,8 +29,8 @@ A new module, the **statement lifecycle** (`src/statements.ts`, `createStatement
 
 Alternatives considered:
 
-- *One method per intent* (the previous shape: `executeSql`, `runStatement`, `runQuery`, `submitExport`): four near-identical entry points that each caller had to choose between, with the policy applied by the caller's choice. Rejected.
-- *A single `execute(request, { policy, disposition, mustFinish })`*: collapses everything into one method, but the interface becomes a bag of flags whose combinations are mostly invalid (an export that must finish, a server statement with the policy). Rejected: a wide interface is shallow.
+- _One method per intent_ (the previous shape: `executeSql`, `runStatement`, `runQuery`, `submitExport`): four near-identical entry points that each caller had to choose between, with the policy applied by the caller's choice. Rejected.
+- _A single `execute(request, { policy, disposition, mustFinish })`_: collapses everything into one method, but the interface becomes a bag of flags whose combinations are mostly invalid (an export that must finish, a server statement with the policy). Rejected: a wide interface is shallow.
 
 ## Consequences
 

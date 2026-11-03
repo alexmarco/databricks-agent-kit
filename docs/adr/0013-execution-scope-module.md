@@ -11,21 +11,21 @@ ADR 0007 fixed the logging policy: one entry per call, written when it ends, at 
 
 A new module, the **execution scope** (`src/execution-scope.ts`, `createExecutionScope(logs)`), owns the sequence. It is built on the log service, whose `startExecution`, `run` and `current` it uses; the log service and the log data model do not change.
 
-| Member                                  | Behaviour                                                                                                                                                                                                                                                  |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run(target, work, entry?)`             | Opens an execution for `target` (`toolName`, `resourceUri`...), runs `work(execution)` with it as the current one, ends it and rethrows the error of `work`, if any, after the execution has ended. `work` receives the execution handle for events of its own |
-| `annotate(diagnostics)`                 | Adds `checkMs` or `warehouseId` to the final entry of the current scope (the one `logs.current()` reports); outside any scope it does nothing                                                                                                              |
-| `ExecutionCancelled`                    | Error that `work` throws to end the execution as `cancelled`                                                                                                                                                                                               |
-| `FinalEntry<T>` (`message`, `arguments?`, `summarize?`) | The optional third argument of `run`: what the single final entry says                                                                                                                                                                     |
+| Member                                                  | Behaviour                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run(target, work, entry?)`                             | Opens an execution for `target` (`toolName`, `resourceUri`...), runs `work(execution)` with it as the current one, ends it and rethrows the error of `work`, if any, after the execution has ended. `work` receives the execution handle for events of its own |
+| `annotate(diagnostics)`                                 | Adds `checkMs` or `warehouseId` to the final entry of the current scope (the one `logs.current()` reports); outside any scope it does nothing                                                                                                                  |
+| `ExecutionCancelled`                                    | Error that `work` throws to end the execution as `cancelled`                                                                                                                                                                                                   |
+| `FinalEntry<T>` (`message`, `arguments?`, `summarize?`) | The optional third argument of `run`: what the single final entry says                                                                                                                                                                                         |
 
 Final status and entry:
 
-| Outcome of `work`                  | Status      | Entry                                                                                                                                                            |
-| ---------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Resolves                           | `completed` | With `entry`: one `info` entry `entry.message` with `{ ...arguments, durationMs, ...summarize(result), ...diagnostics }`. Without it: none                       |
-| Throws `ExecutionCancelled`        | `cancelled` | None                                                                                                                                                             |
-| Throws a `DakError`                | `failed`    | One `warn` entry without stack trace; with `entry` its metadata is `{ ...arguments, durationMs, ...diagnostics }`, without it none                               |
-| Throws any other error             | `failed`    | One `error` entry with the stack trace and the same metadata                                                                                                     |
+| Outcome of `work`           | Status      | Entry                                                                                                                                      |
+| --------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Resolves                    | `completed` | With `entry`: one `info` entry `entry.message` with `{ ...arguments, durationMs, ...summarize(result), ...diagnostics }`. Without it: none |
+| Throws `ExecutionCancelled` | `cancelled` | None                                                                                                                                       |
+| Throws a `DakError`         | `failed`    | One `warn` entry without stack trace; with `entry` its metadata is `{ ...arguments, durationMs, ...diagnostics }`, without it none         |
+| Throws any other error      | `failed`    | One `error` entry with the stack trace and the same metadata                                                                               |
 
 - **The level by error class stays with the log service.** `ExecutionHandle.fail(error, metadata?)` already chooses `warn` or `error` (ADR 0007); the scope calls it and does not decide levels again.
 - **Diagnostics travel through the current scope.** They are kept per execution in a `WeakMap` keyed by the execution handle, and `annotate` finds the handle with `logs.current()`, the same way the "warehouse chosen" event already finds its execution. Concurrent scopes therefore never mix: each run has its own record and each async context its own current execution. Outside a scope `logs.current()` is the lifecycle execution, which has no record, so a stray `annotate` is ignored.
@@ -36,10 +36,10 @@ Final status and entry:
 
 Alternatives considered:
 
-- *Keep the out-parameter and only share the ceremony*: the interfaces of the lifecycle and the manager would keep a logging concern (spec user story 15). Rejected.
-- *A second `AsyncLocalStorage` owned by the scope*: two ambient contexts that must be kept in step; `logs.current()` already is the ambient execution. Rejected.
-- *Put the final entry into the log service* (`LogService.runTool`): it would learn about arguments, result summaries and diagnostics, which are concerns of the callers; the scope keeps the log service a plain writer. Rejected.
-- *Let `work` return its status instead of throwing `ExecutionCancelled`*: every caller would unwrap a result envelope to support one caller that cancels. Rejected.
+- _Keep the out-parameter and only share the ceremony_: the interfaces of the lifecycle and the manager would keep a logging concern (spec user story 15). Rejected.
+- _A second `AsyncLocalStorage` owned by the scope_: two ambient contexts that must be kept in step; `logs.current()` already is the ambient execution. Rejected.
+- _Put the final entry into the log service_ (`LogService.runTool`): it would learn about arguments, result summaries and diagnostics, which are concerns of the callers; the scope keeps the log service a plain writer. Rejected.
+- _Let `work` return its status instead of throwing `ExecutionCancelled`_: every caller would unwrap a result envelope to support one caller that cancels. Rejected.
 
 ## Consequences
 

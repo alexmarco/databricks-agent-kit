@@ -6,11 +6,11 @@ to Genie, to the AI Gateway, or to CLI commands that run SQL outside `dak`.
 
 ## Conflicting skills
 
-| Skill | Conflict |
-| --- | --- |
-| `databricks-data-discovery` | Sends every data question to Genie (`databricks genie ask`) |
-| `databricks-genie-agents` | Genie |
-| `databricks-unity-gateway` | AI Gateway and Unity Gateway services |
+| Skill                                                                                                                                                              | Conflict                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `databricks-data-discovery`                                                                                                                                        | Sends every data question to Genie (`databricks genie ask`)                                                                        |
+| `databricks-genie-agents`                                                                                                                                          | Genie                                                                                                                              |
+| `databricks-unity-gateway`                                                                                                                                         | AI Gateway and Unity Gateway services                                                                                              |
 | `databricks-core`, and the skills that embed its commands (`databricks-dbsql`, `databricks-unity-catalog`, `databricks-metric-views`, `databricks-pipelines`, ...) | Tell the agent to run SQL and explore schemas with `databricks experimental aitools tools query`, `discover-schema` or `statement` |
 
 ## Install only the useful skills
@@ -28,12 +28,12 @@ These skills still mention the CLI commands, so the precedence note below is sti
 If the official skills are installed and include any conflicting skill, add this note to your global agent instructions so
 that the MCP server takes precedence.
 
-| Agent | Global instructions file |
-| --- | --- |
-| Codex | `~/.codex/AGENTS.md` |
-| OpenCode | `~/.config/opencode/AGENTS.md` |
-| Claude Code | `~/.claude/CLAUDE.md` |
-| Other agents | Their global `AGENTS.md` |
+| Agent        | Global instructions file       |
+| ------------ | ------------------------------ |
+| Codex        | `~/.codex/AGENTS.md`           |
+| OpenCode     | `~/.config/opencode/AGENTS.md` |
+| Claude Code  | `~/.claude/CLAUDE.md`          |
+| Other agents | Their global `AGENTS.md`       |
 
 ```markdown
 ## Databricks: MCP precedence
