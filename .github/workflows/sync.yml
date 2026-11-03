@@ -1,0 +1,47 @@
+name: Sync develop
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-develop
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Back-merge main into develop
+    runs-on: ubuntu-latest
+    env:
+      # A personal access token, so that the CI runs on the pull request (GITHUB_TOKEN does not start workflows).
+      GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+    steps:
+      - name: Check out the history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+      - name: Set the author of the merge commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Prepare the sync branch
+        id: sync
+        run: bash scripts/ci/sync-main-into-develop.sh | tee -a "$GITHUB_OUTPUT"
+
+      - name: Open the pull request into develop
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          open_pull_requests=$(gh pr list --head sync/main-into-develop --base develop --state open --json number --jq 'length')
+          if [ "$open_pull_requests" -eq 0 ]; then
+            gh pr create --base develop --head sync/main-into-develop \
+              --title "chore: sync main back into develop" \
+              --body "Brings the release commits of \`main\` back into \`develop\`. Merge it with squash."
+          fi
