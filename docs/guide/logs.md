@@ -18,23 +18,7 @@ directory is `0700` and the file is `0600`, so only its owner can read it. Logs 
 
 ## Data model
 
-```mermaid
-classDiagram
-  direction LR
-  class Execution {
-    +id UUID v7
-    +start and end time
-    +status: started | completed | failed | cancelled
-  }
-  class LogEntry {
-    +level: trace | debug | info | warn | error | fatal
-  }
-  Execution "1" *-- "0..*" LogEntry : ordered entries
-
-  classDef record fill:#E8F1FF,stroke:#2F6FDB,color:#1F2937
-  class Execution record
-  class LogEntry record
-```
+![An execution has an id (UUID v7), a start and end time and a status, and holds its log entries in order; each entry has a level from trace to fatal](/diagrams/logs-model.svg)
 
 - Every tool call is an **execution**, with a start and end time, a status and its ordered entries.
 - Each export runs as its own execution.
