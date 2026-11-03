@@ -25,5 +25,6 @@ Possible statuses: Proposed, Accepted, Superseded.
 | [0017](0017-documentation-site-on-github-pages.md) | Documentation site on GitHub Pages with VitePress | Accepted |
 | [0018](0018-excalidraw-diagrams-rendered-to-svg.md) | Excalidraw diagrams rendered to SVG with headless Chrome | Accepted |
 | [0019](0019-dependabot-branches-and-mermaid-pin.md) | Dependabot branches in the branch policy, and Mermaid pinned to 11 | Accepted |
+| [0020](0020-dependabot-reads-its-configuration-from-main.md) | Dependabot reads its configuration from main | Accepted |
 
 Current design: [docs/design.md](../design.md).
