@@ -33,6 +33,9 @@ jobs:
       - name: Check the format
         run: npm run format:check
 
+      - name: Lint the install script
+        run: shellcheck scripts/install.sh
+
       - name: Type check
         run: npm run typecheck
 
