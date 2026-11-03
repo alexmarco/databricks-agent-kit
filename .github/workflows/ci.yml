@@ -3,6 +3,8 @@ name: CI
 on:
   pull_request:
     branches: [develop, main]
+    # "edited" re-runs the checks when the title changes: the title becomes the squash commit.
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
@@ -96,6 +98,11 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: npx --no -- commitlint --from "$BASE_SHA" --to "$HEAD_SHA"
+
+      - name: Validate the pull request title
+        env:
+          PULL_REQUEST_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s\n' "$PULL_REQUEST_TITLE" | npx --no -- commitlint
 
   branch-policy:
     name: branch-policy
