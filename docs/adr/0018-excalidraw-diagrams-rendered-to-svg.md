@@ -33,6 +33,11 @@ given.
   does not read the DOM after a fixed time, because that returned before the export finished.
 - **Backgrounds.** Scenes are exported with an opaque white background, so each diagram reads the same in the light and
   dark themes of the site.
+- **Corners.** Rectangles use `roundness: { type: 3, value: 12 }`, a smaller fixed radius than the Excalidraw default
+  of 32.
+- **Sequence diagrams stay in Mermaid.** A sequence diagram is kept as a Mermaid block in its page, rendered by
+  `vitepress-plugin-mermaid` (ADR 0017). Each tool call sits in its own `rect` block, with translucent fills that read
+  in both themes.
 
 ## Consequences
 
@@ -40,7 +45,7 @@ given.
   runner is enough to render there. No CI job renders today; a check that the committed SVGs match a fresh render is a
   separate decision.
 - The export bundle is about 20 MB while it runs. It is not committed.
-- Excalidraw does not keep unknown top-level fields when it saves a file. A source re-saved on excalidraw.com needs its
-  `title` added back, and the script fails with a message when it is missing.
-- Mermaid stays installed until every Mermaid block is replaced. When that is done, this decision replaces the diagram
-  part of ADR 0017, and the Mermaid dependencies are removed.
+- Excalidraw does not keep unknown top-level fields when it saves a file. A source re-saved on excalidraw.com or in the
+  VS Code Excalidraw editor needs its `title` added back, and the script fails with a message when it is missing.
+- Mermaid and `vitepress-plugin-mermaid` stay installed for the sequence diagrams. For every other diagram, this
+  decision replaces the diagram part of ADR 0017.
