@@ -49,3 +49,9 @@ Node.js 22.18 or later is required (type stripping is unflagged from that versio
 - Use Conventional Commits: `type(scope): description`.
 - If a pre-commit or commit message check fails, fix the cause and commit again; never skip the hooks.
 - Do not force-push shared branches.
+
+## Repository mechanics
+
+- `main` is the default branch. Work reaches `develop` first and `main` only through a release. GitHub reads repository configuration such as `.github/dependabot.yml` from `main`, so a change to it takes effect after the next release, or sooner through a `hotfix/*`. Confirm the effect on the branch GitHub reads before reporting a configuration change as done.
+- A pull request needs one code-owner approval, and the maintainer is the only code owner. Open the pull request, report its checks, and ask the maintainer to merge it in the web UI with the bypass.
+- Diagrams: read `docs/diagrams-src/README.md` before creating, editing or checking one.

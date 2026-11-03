@@ -301,7 +301,7 @@ Required checks of pull requests into `develop` and `main`:
 | `dependency-review` | Dependency changes of the pull request                                                                    |
 | CodeQL analysis     | Static security analysis of JavaScript and TypeScript on pull requests and weekly on `main`               |
 
-Dependabot proposes npm and GitHub Actions updates weekly, grouped, into `develop`. Its `dependabot/*` branches are allowed into `develop`, and major updates of `mermaid` are ignored ([ADR 0019](adr/0019-dependabot-branches-and-mermaid-pin.md)).
+Dependabot proposes npm and GitHub Actions updates weekly, grouped, into `develop`. Its `dependabot/*` branches are allowed into `develop`, and major updates of `mermaid` are ignored ([ADR 0019](adr/0019-dependabot-branches-and-mermaid-pin.md)). Dependabot reads its configuration from `main`, so a change to it applies after the next release ([ADR 0020](adr/0020-dependabot-reads-its-configuration-from-main.md)).
 
 ### 10.3 Integration tests
 

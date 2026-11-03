@@ -8,7 +8,7 @@ export default withMermaid(
     base: "/databricks-agent-kit/",
     lang: "en-US",
     cleanUrls: true,
-    srcExclude: ["research/**"],
+    srcExclude: ["research/**", "diagrams-src/**"],
     rewrites: { "adr/README.md": "adr/index.md" },
 
     themeConfig: {
