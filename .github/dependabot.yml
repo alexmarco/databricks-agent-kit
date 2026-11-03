@@ -10,6 +10,11 @@ updates:
       # Keeps Dependabot commits valid for the commitlint check, e.g. "chore(deps): ...".
       prefix: chore
       include: scope
+    ignore:
+      # vitepress-plugin-mermaid supports Mermaid 10 and 11 only (ADR 0019).
+      - dependency-name: mermaid
+        update-types:
+          - version-update:semver-major
     groups:
       npm-dependencies:
         patterns:
