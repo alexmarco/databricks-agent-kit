@@ -22,6 +22,23 @@ Design: [docs/design.md](docs/design.md).
 
 ## Installation
 
+There are two ways to install `dak`.
+
+### From the latest release
+
+```bash
+curl -fsSL https://github.com/alexmarco/databricks-agent-kit/releases/latest/download/install.sh | sh
+dak --version
+```
+
+The script checks Node.js and npm, then installs the tarball of the latest release with `npm install --global`. It installs
+nothing else and does not change your PATH. Set `DAK_VERSION=0.2.0` to install a specific release. On Windows, run it from
+Git Bash or WSL.
+
+### From a clone
+
+Use this way to contribute or to run unreleased code.
+
 ```bash
 git clone <this-repository> databricks-agent-kit
 cd databricks-agent-kit
@@ -505,7 +522,7 @@ Decisions are recorded in [docs/adr](docs/adr/README.md).
 Contributions are made through pull requests. The branch flow, the checks and the release process are described in [docs/design.md](docs/design.md#10-delivery-pipeline) and recorded in [ADR 0016](docs/adr/0016-ci-cd-pipeline-and-gitflow.md).
 
 - **Requirements:** Node.js 22.18 or later. Run `npm ci` once; it installs the dependencies and the git hooks.
-- **Branch names:** `feature/<desc>` and `bugfix/<desc>` branch from `develop` and merge into `develop`. `hotfix/<desc>` branches from `main`, merges into `main` and is then merged back into `develop`. Pull requests into `main` come only from `develop` or `hotfix/*`. Dependabot branches (`dependabot/*`) are also accepted into `develop`.
-- **Commit messages:** [Conventional Commits](https://www.conventionalcommits.org/), `type(scope): description`, for example `fix(export): ...`. Each commit is checked locally by the commit-msg hook and by CI for every commit of the pull request. Merge commits created by GitHub are not checked.
+- **Branch names:** `feature/<desc>` and `bugfix/<desc>` branch from `develop` and merge into `develop`. `hotfix/<desc>` branches from `main`, merges into `main` and is then merged back into `develop`. Pull requests into `main` come only from `develop`, `hotfix/*` or the release branch that Release Please creates. Dependabot branches (`dependabot/*`) and the `sync/*` back-merge branch are also accepted into `develop`.
+- **Commit messages:** [Conventional Commits](https://www.conventionalcommits.org/), `type(scope): description`, for example `fix(export): ...`. Each commit is checked locally by the commit-msg hook and by CI for every commit of the pull request. The title of the pull request must follow the same format, because it becomes the commit in `develop` and the line in the release notes. Merge commits created by GitHub are not checked.
 - **Local hooks:** `pre-commit` runs `npm run format:check` and `npm run lint` (Biome); `commit-msg` runs commitlint. Before you push, run the same checks as CI: `npm run typecheck`, `npm run build` and `npm run test:coverage`.
-- **Review:** each pull request needs one approval from a code owner and passing checks (`quality`, `test`, `commits`, `branch-policy`, `dependency-review` and CodeQL). The branch must be up to date with its base and conversations must be resolved. Pull requests are merged with a merge commit.
+- **Review:** each pull request needs one approval from a code owner and passing checks (`quality`, `test`, `commits`, `branch-policy`, `dependency-review` and CodeQL). The branch must be up to date with its base and conversations must be resolved. Pull requests into `develop` are squash-merged and pull requests into `main` are merged with a merge commit.
