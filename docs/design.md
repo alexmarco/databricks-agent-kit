@@ -278,11 +278,11 @@ Decisions and rationale: [ADR 0016](adr/0016-ci-cd-pipeline-and-gitflow.md).
 
 ### 10.1 Branch flow
 
-| Branch                  | Created from | Pull request into                       | Purpose                                 |
-| ----------------------- | ------------ | --------------------------------------- | --------------------------------------- |
+| Branch                  | Created from | Pull request into                       | Purpose                                    |
+| ----------------------- | ------------ | --------------------------------------- | ------------------------------------------ |
 | `feature/*`, `bugfix/*` | `develop`    | `develop`                               | Changes; `bugfix/*` for non-critical fixes |
-| `develop`               | `main`       | `main`                                  | The next release                        |
-| `hotfix/*`              | `main`       | `main`, then back-merged into `develop` | Critical fix in production              |
+| `develop`               | `main`       | `main`                                  | The next release                           |
+| `hotfix/*`              | `main`       | `main`, then back-merged into `develop` | Critical fix in production                 |
 
 Neither `main` nor `develop` accepts direct pushes. `scripts/ci/branch-policy.sh` rejects a pull request whose branch does not match its target. Each pull request is merged with a merge commit, so the atomic commits of a branch stay in the history. It needs one approval from a code owner (the maintainer), resolved conversations and a branch up to date with its base. The maintainer is the only bypass actor, for pull requests only.
 
@@ -292,14 +292,14 @@ Local hooks run the same package scripts as CI: `pre-commit` runs `npm run forma
 
 Required checks of pull requests into `develop` and `main`:
 
-| Check               | What it verifies                                                                                          |
-| ------------------- | --------------------------------------------------------------------------------------------------------- |
-| `quality`           | Lint, format, type check, build and `npm audit` of the runtime dependencies at high severity or above       |
+| Check               | What it verifies                                                                                                                        |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `quality`           | Lint, format, type check, build and `npm audit` of the runtime dependencies at high severity or above                                   |
 | `test (…)`          | `npm run test:coverage` on Ubuntu (Node.js 22.18 and 24) and Windows (Node.js 24); thresholds 95% lines, 85% branches and 90% functions |
-| `commits`           | commitlint over the commits of the pull request; GitHub merge commits are skipped                         |
-| `branch-policy`     | The source and target branches follow the flow above                                                     |
-| `dependency-review` | Dependency changes of the pull request                                                                    |
-| CodeQL analysis     | Static security analysis of JavaScript and TypeScript on pull requests and weekly on `main`               |
+| `commits`           | commitlint over the commits of the pull request; GitHub merge commits are skipped                                                       |
+| `branch-policy`     | The source and target branches follow the flow above                                                                                    |
+| `dependency-review` | Dependency changes of the pull request                                                                                                  |
+| CodeQL analysis     | Static security analysis of JavaScript and TypeScript on pull requests and weekly on `main`                                             |
 
 Dependabot proposes npm and GitHub Actions updates weekly, grouped, into `develop`. Its `dependabot/*` branches are allowed into `develop`, and major updates of `mermaid` are ignored ([ADR 0019](adr/0019-dependabot-branches-and-mermaid-pin.md)). Dependabot reads its configuration from `main`, so a change to it applies after the next release ([ADR 0020](adr/0020-dependabot-reads-its-configuration-from-main.md)).
 

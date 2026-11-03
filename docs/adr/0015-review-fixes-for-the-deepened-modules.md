@@ -23,9 +23,9 @@ This ADR supersedes the parts of ADR 0009 that describe `origin` and of ADR 0014
 
 Findings not changed, with the evidence:
 
-- *Export errors lose the error class and SQLSTATE.* `awaitExport` keeps the message of the statement alone (`statement.status.error?.message ?? "Export statement ended in state ..."`). That is the message the export manager had before the refactor (`src/export/manager.ts` at `20f2d58`, same expression) and ADR 0010 documents it, so export states stay as they were.
-- *The export starts the statement before the duplicate-path check.* The export id and its path contain the statement id, which Databricks assigns on submit, so the path cannot be known before submitting. The order is the one before the refactor (`start` at `20f2d58`) and the rejection already cancels the statement. A duplicate needs Databricks to hand out a statement id that a local export already uses, so the case is a safeguard.
-- *The doctor's `SELECT 1` export goes through `DESCRIBE QUERY` first.* Exports were always checked when writes are off (`submitExport` at `20f2d58` called `assertReadOnly`). With this ADR `submit` and `submitExport` are consistent (both agent statements), so the extra call is the cost of exercising the same path as real exports.
+- _Export errors lose the error class and SQLSTATE._ `awaitExport` keeps the message of the statement alone (`statement.status.error?.message ?? "Export statement ended in state ..."`). That is the message the export manager had before the refactor (`src/export/manager.ts` at `20f2d58`, same expression) and ADR 0010 documents it, so export states stay as they were.
+- _The export starts the statement before the duplicate-path check._ The export id and its path contain the statement id, which Databricks assigns on submit, so the path cannot be known before submitting. The order is the one before the refactor (`start` at `20f2d58`) and the rejection already cancels the statement. A duplicate needs Databricks to hand out a statement id that a local export already uses, so the case is a safeguard.
+- _The doctor's `SELECT 1` export goes through `DESCRIBE QUERY` first._ Exports were always checked when writes are off (`submitExport` at `20f2d58` called `assertReadOnly`). With this ADR `submit` and `submitExport` are consistent (both agent statements), so the extra call is the cost of exercising the same path as real exports.
 
 ## Consequences
 

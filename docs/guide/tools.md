@@ -3,13 +3,13 @@
 `dak` exposes five tools. The definitions stay under 2,500 characters in total, so they cost little context in every
 session.
 
-| Tool | Parameters | Purpose |
-| --- | --- | --- |
-| `list_objects` | `catalog?`, `schema?`, `pattern?`, `limit?` | Without arguments, catalogs. With `catalog`, its schemas. With `catalog` and `schema`, its tables. `pattern` is a substring or a glob |
-| `describe_table` | `full_name`, `sample_rows?`, `lineage?` | Columns, comments, primary and foreign keys, clustering, partitioning and tags. Optional sample (at most 100 rows) and upstream or downstream lineage |
-| `search_metadata` | `query`, `catalog?`, `limit?` | Find tables and columns by name or comment |
-| `execute_sql` | `statement`, `parameters?`, `catalog?`, `schema?`, `row_limit?`, `warehouse_id?`, `export?` | One statement with `:name` parameters and bounded results. With `export`, the full result goes to a file |
-| `get_statement` | `statement_id`, `wait_seconds?`, `cancel?` | Follow up a statement still running after 30 seconds, or an export. `wait_seconds` goes from 0 to 30. `cancel: true` cancels it |
+| Tool              | Parameters                                                                                  | Purpose                                                                                                                                               |
+| ----------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_objects`    | `catalog?`, `schema?`, `pattern?`, `limit?`                                                 | Without arguments, catalogs. With `catalog`, its schemas. With `catalog` and `schema`, its tables. `pattern` is a substring or a glob                 |
+| `describe_table`  | `full_name`, `sample_rows?`, `lineage?`                                                     | Columns, comments, primary and foreign keys, clustering, partitioning and tags. Optional sample (at most 100 rows) and upstream or downstream lineage |
+| `search_metadata` | `query`, `catalog?`, `limit?`                                                               | Find tables and columns by name or comment                                                                                                            |
+| `execute_sql`     | `statement`, `parameters?`, `catalog?`, `schema?`, `row_limit?`, `warehouse_id?`, `export?` | One statement with `:name` parameters and bounded results. With `export`, the full result goes to a file                                              |
+| `get_statement`   | `statement_id`, `wait_seconds?`, `cancel?`                                                  | Follow up a statement still running after 30 seconds, or an export. `wait_seconds` goes from 0 to 30. `cancel: true` cancels it                       |
 
 ## The usual workflow
 

@@ -7,9 +7,9 @@ agent can read the logs through MCP resources, and you can read the file directl
 
 The store is `logs.db` in a per-user state directory:
 
-| Platform | Directory |
-| --- | --- |
-| Windows | `%LOCALAPPDATA%\databricks-agent-kit` |
+| Platform      | Directory                                                                                |
+| ------------- | ---------------------------------------------------------------------------------------- |
+| Windows       | `%LOCALAPPDATA%\databricks-agent-kit`                                                    |
 | Other systems | `$XDG_STATE_HOME/databricks-agent-kit`, by default `~/.local/state/databricks-agent-kit` |
 
 Set `DAK_STORAGE_DIR` to use another directory. Every `dak` process of the same user shares the store. Outside Windows, the
@@ -56,12 +56,12 @@ Entries are kept for 90 days. The store is purged at startup and every 24 hours.
 
 ## Reading the logs through MCP
 
-| Resource | Content |
-| --- | --- |
-| `resource://logs/errors/recent` | Latest error and fatal entries |
-| `resource://logs/executions/recent` | Latest executions |
-| `resource://logs/execution/{executionId}` | One execution with all its entries |
-| `resource://logs/stats` | Executions, errors and warnings in the last 24 hours |
+| Resource                                  | Content                                              |
+| ----------------------------------------- | ---------------------------------------------------- |
+| `resource://logs/errors/recent`           | Latest error and fatal entries                       |
+| `resource://logs/executions/recent`       | Latest executions                                    |
+| `resource://logs/execution/{executionId}` | One execution with all its entries                   |
+| `resource://logs/stats`                   | Executions, errors and warnings in the last 24 hours |
 
 There is no log search tool. The log costs no context until an agent reads one of these resources. In HTTP mode, every
 client sees the calls of every other client, SQL text included.

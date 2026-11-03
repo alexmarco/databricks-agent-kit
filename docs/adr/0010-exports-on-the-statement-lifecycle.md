@@ -11,10 +11,10 @@ ADR 0009 created the statement lifecycle module and left the export manager with
 
 The lifecycle interface grows by two methods, both specific to exports; `cancel` is reused as it is.
 
-| Method                                      | Behaviour                                                                                                                                                                                |
-| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `awaitExport(statementId, signal)`          | Polls an `EXTERNAL_LINKS` statement until it succeeds and returns `ExportResultInfo`: columns, chunk count, row count of each chunk, `truncated` and the link of chunk 0 when the response carries it |
-| `exportChunkLink(statementId, index, signal)` | Requests a fresh presigned link for a result chunk and returns an `ExportChunkLink` (`url`, `rowCount?`, `expiration?`)                                                                |
+| Method                                        | Behaviour                                                                                                                                                                                             |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `awaitExport(statementId, signal)`            | Polls an `EXTERNAL_LINKS` statement until it succeeds and returns `ExportResultInfo`: columns, chunk count, row count of each chunk, `truncated` and the link of chunk 0 when the response carries it |
+| `exportChunkLink(statementId, index, signal)` | Requests a fresh presigned link for a result chunk and returns an `ExportChunkLink` (`url`, `rowCount?`, `expiration?`)                                                                               |
 
 - **The polling schedule of exports is owned by the module and differs from `get` by design.** `get` serves the agent and is bounded by the requested wait (0 to 30 s). `awaitExport` serves a background job: waits of 1 s, 2 s, 3 s... growing to 10 s, with no upper bound (design section 4.6), until Databricks ends the statement or the job is cancelled. They are two schedules with two purposes, each explicit in the module.
 - **Cancellation of the wait is the caller's `AbortSignal`.** Both methods reject with the signal's reason as soon as it aborts, and `awaitExport` stops polling. The manager keeps its job `AbortController`; it does not need to wrap the calls. `untilAborted` moves to `src/abort.ts` because the module and the manager (download retry waits) both use it.
@@ -25,8 +25,8 @@ The lifecycle interface grows by two methods, both specific to exports; `cancel`
 
 Alternatives considered:
 
-- *A single `export(request, format, signal)` that submits, waits and yields chunks*: hides the most, but moves the job map, retries and link renewal into the module or forces it to know about downloading, and `get_statement` still needs the statement id before the export ends. Rejected: the module would stop being about statements.
-- *Share the schedule of `get`*: `get` has a 30 s bound and no signal; exports need no bound and cancellation. Forcing one schedule onto both would add flags to `get`. Rejected.
+- _A single `export(request, format, signal)` that submits, waits and yields chunks_: hides the most, but moves the job map, retries and link renewal into the module or forces it to know about downloading, and `get_statement` still needs the statement id before the export ends. Rejected: the module would stop being about statements.
+- _Share the schedule of `get`_: `get` has a 30 s bound and no signal; exports need no bound and cancellation. Forcing one schedule onto both would add flags to `get`. Rejected.
 
 ## Consequences
 

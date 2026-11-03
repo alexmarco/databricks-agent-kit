@@ -54,10 +54,10 @@ mode.
 
 ## Troubleshooting a rejection
 
-| Message | What to do |
-| --- | --- |
+| Message                                                | What to do                                                                       |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------- |
 | `Read-only mode: ...` with a statement that is a query | Remove a leading comment, or move literal `;` characters into `:name` parameters |
-| `Read-only mode: ...` for a write | Expected. Restart with `--allow-writes` only if writes are intended |
-| `Read-only check did not finish ...` | The warehouse is starting. Retry in a moment |
+| `Read-only mode: ...` for a write                      | Expected. Restart with `--allow-writes` only if writes are intended              |
+| `Read-only check did not finish ...`                   | The warehouse is starting. Retry in a moment                                     |
 
 More cases are in [troubleshooting](/guide/troubleshooting).

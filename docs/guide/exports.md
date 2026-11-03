@@ -28,13 +28,13 @@ in the background. `row_limit` and `DAK_MAX_ROWS` do not apply to an export. The
 
 Follow the export with `get_statement`, using the `statement_id`. It returns the state under `export.status`:
 
-| Status | Meaning |
-| --- | --- |
-| `PENDING` | The query is still running in Databricks |
+| Status        | Meaning                                                                                     |
+| ------------- | ------------------------------------------------------------------------------------------- |
+| `PENDING`     | The query is still running in Databricks                                                    |
 | `DOWNLOADING` | Chunks are being downloaded. `progress` has `chunksDone`, `chunksTotal`, `rows` and `bytes` |
-| `SUCCEEDED` | Done. `files`, `rows`, `bytes` and `truncated` are set |
-| `FAILED` | Failed. `error` has the reason, and no partial file is left behind |
-| `CANCELED` | Cancelled. The partial files were deleted |
+| `SUCCEEDED`   | Done. `files`, `rows`, `bytes` and `truncated` are set                                      |
+| `FAILED`      | Failed. `error` has the reason, and no partial file is left behind                          |
+| `CANCELED`    | Cancelled. The partial files were deleted                                                   |
 
 Pass `wait_seconds` (0 to 30) to wait for the export to end before the answer, instead of polling. Pass `cancel: true` to
 cancel the statement in Databricks, stop the download and delete the partial files.
@@ -44,11 +44,11 @@ When the result is larger than `DAK_EXPORT_MAX_BYTES`, Databricks cuts it. The e
 
 ## Formats
 
-| Format | Result | Notes |
-| --- | --- | --- |
-| `csv` | `<id>.csv` | One file, however many chunks Databricks returns. One header line |
+| Format    | Result                                       | Notes                                                                                                             |
+| --------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `csv`     | `<id>.csv`                                   | One file, however many chunks Databricks returns. One header line                                                 |
 | `parquet` | `<id>/part-00000.parquet`, `part-00001`, ... | One ZSTD-compressed file per chunk, in a directory. `DECIMAL`, `TIMESTAMP`, `STRUCT` and `ARRAY` keep their types |
-| `sqlite` | `<id>.db` | One file with the table `result` |
+| `sqlite`  | `<id>.db`                                    | One file with the table `result`                                                                                  |
 
 Each output is written under a temporary name (`<id>.csv.part`, `<id>.db.part`, or the directory `<id>.part/` for Parquet)
 and renamed when complete. An unfinished export never looks finished.
@@ -71,16 +71,16 @@ In HTTP mode the files are on the server machine.
   cannot be told apart from the string `"null"`. Use Parquet or SQLite when the difference matters.
 - **SQLite types.** Values arrive as text, and the column affinity converts them:
 
-  | Databricks type | SQLite column | Conversion |
-  | --- | --- | --- |
-  | `TINYINT`, `SMALLINT`, `INT`, `BIGINT` | `INTEGER` | None. `BIGINT` stays exact |
-  | `BOOLEAN` | `INTEGER` | `true` becomes 1 and `false` becomes 0 |
-  | `FLOAT`, `DOUBLE` | `REAL` | None |
-  | `DECIMAL` of 15 digits or fewer | `REAL` | None |
-  | `DECIMAL` of more than 15 digits | `TEXT` | None, so no precision is lost |
-  | `DATE`, `TIMESTAMP`, `STRING` | `TEXT` | None |
-  | `STRUCT`, `ARRAY`, `MAP` | `TEXT` with JSON | None. Query them with `json_extract` |
-  | Anything else, such as `BINARY` and intervals | `TEXT` | None |
+  | Databricks type                               | SQLite column    | Conversion                             |
+  | --------------------------------------------- | ---------------- | -------------------------------------- |
+  | `TINYINT`, `SMALLINT`, `INT`, `BIGINT`        | `INTEGER`        | None. `BIGINT` stays exact             |
+  | `BOOLEAN`                                     | `INTEGER`        | `true` becomes 1 and `false` becomes 0 |
+  | `FLOAT`, `DOUBLE`                             | `REAL`           | None                                   |
+  | `DECIMAL` of 15 digits or fewer               | `REAL`           | None                                   |
+  | `DECIMAL` of more than 15 digits              | `TEXT`           | None, so no precision is lost          |
+  | `DATE`, `TIMESTAMP`, `STRING`                 | `TEXT`           | None                                   |
+  | `STRUCT`, `ARRAY`, `MAP`                      | `TEXT` with JSON | None. Query them with `json_extract`   |
+  | Anything else, such as `BINARY` and intervals | `TEXT`           | None                                   |
 
   An empty column name becomes `column_<position>`. A repeated name gets the first free suffix `_2`, `_3`, and so on, because
   SQLite compares names without case. SQLite allows at most 2000 columns.
