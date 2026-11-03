@@ -53,3 +53,16 @@ Terms used in the code and the documents of `databricks-agent-kit`. Design vocab
 | **Workspace connection** | The part of the workspace that `connectWorkspace` builds without a log service: `auth`, `client`, `warehouses` and `statements`. `dak doctor` uses it with its smaller `DOCTOR_LIMITS`.                                                                                              |
 | **Adapters**             | The `WorkspaceAdapters` of a session: `resolveAuth`, `createClient`, `fetch` and `sleep`, real in `src/cli.ts` and fakes in tests.                                                                                                                                                   |
 | **Closing**              | `session.close()`: waits for a build in flight, cancels the running exports and their Databricks statements and refuses later `workspace()` calls and export starts (ADR 0015); it never resolves credentials, so a session that created nothing closes without touching Databricks. |
+
+## Metadata cache
+
+| Term               | Meaning                                                                                                                                                                                              |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Metadata cache** | The module (`src/metadata-cache.ts`, ADR 0021) that keeps the answers of `describe_table` and `list_objects` in `cache.db` and decides whether a lookup is served from it or loaded from Databricks. |
+| **Cache entry**    | One cached answer, keyed by cache identity, kind and lowercase key. Kind `table` holds a table description; kind `listing` holds the full listing of one level (catalogs, schemas or tables).        |
+| **Cache identity** | The local SHA-256 of host, authentication method and the credential that identifies the principal (PAT token, M2M `client_id`, U2M profile name). Entries and statistics never cross identities.     |
+| **TTL**            | How long an entry is fresh after it was loaded (`DAK_CACHE_TTL`, 24 h by default). Computed at read time; `0` disables the cache.                                                                    |
+| **Load / reload**  | Fetching an answer from Databricks and storing it. A reload replaces an existing entry and is counted as changed or unchanged by comparing the new value with the stored one.                        |
+| **Cache status**   | How an answer was served, in its `cache` field: `hit` (fresh entry), `miss` (no entry), `expired` (reloaded after the TTL), `refreshed` (reload forced with `refresh`), `bypassed` (cache failed).   |
+| **Refresh**        | `refresh: true` on a cached tool: skips the entry and replaces it with the fresh answer.                                                                                                             |
+| **Purge**          | Deleting the entries unused for 30 days, at startup and every 24 h.                                                                                                                                  |
