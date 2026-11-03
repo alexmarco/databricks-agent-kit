@@ -31,15 +31,17 @@ fi
 
 if [ -n "${DAK_VERSION:-}" ]; then
   version=${DAK_VERSION#v}
+  invalid_version="DAK_VERSION must look like 0.2.0 or v0.2.0, got \"$DAK_VERSION\"."
 else
   command -v curl >/dev/null 2>&1 || fail "curl was not found. Install curl or set DAK_VERSION."
   latest_release_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$repository/releases/latest") ||
     fail "Could not find the latest release of $repository."
   version=${latest_release_url##*/v}
+  invalid_version="Could not find the latest release of $repository."
 fi
 case "$version" in
   [0-9]*.[0-9]*.[0-9]*) ;;
-  *) fail "Could not find the latest release of $repository (got \"$version\")." ;;
+  *) fail "$invalid_version" ;;
 esac
 
 tarball_url="https://github.com/$repository/releases/download/v$version/databricks-agent-kit-$version.tgz"

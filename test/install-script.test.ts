@@ -110,7 +110,17 @@ test("fails when npm is missing", () => {
   assert.match(result.stderr, /npm was not found/);
 });
 
-test("fails when the latest release cannot be found", () => {
+test("fails when DAK_VERSION is not a version", () => {
+  for (const requested of ["latest", "0.2", "v1.x.0"]) {
+    const result = runInstaller({}, { DAK_VERSION: requested });
+    assert.equal(result.status, 1, requested);
+    assert.ok(result.stderr.includes(`DAK_VERSION must look like 0.2.0 or v0.2.0, got "${requested}".`), result.stderr);
+    assert.deepEqual(result.npmCalls, []);
+  }
+});
+
+// The Windows runner of the CI runs its own curl instead of the stub, so the failure cannot be simulated there.
+test("fails when the latest release cannot be found", { skip: process.platform === "win32" }, () => {
   const result = runInstaller({ latestLookupFails: true });
   assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
   assert.match(result.stderr, /Could not find the latest release/);
