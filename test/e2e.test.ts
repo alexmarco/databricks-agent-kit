@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -641,6 +641,23 @@ test("stdio: DAK_CACHE_TTL=0 disables the cache: no cache field and no cache.db"
       (await readdir(storageDir)).filter((name) => name.startsWith("cache.db")),
       [],
     );
+  } finally {
+    await stub.close();
+    await rm(storageDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
+test("stdio: a corrupt cache.db does not reach the agent as an error", { timeout: 60_000 }, async () => {
+  const stub = await startDatabricksStub();
+  const storageDir = await mkdtemp(join(tmpdir(), "dak-e2e-"));
+  try {
+    await writeFile(join(storageDir, "cache.db"), "this is not a SQLite database".repeat(50));
+    await withDakChild(stub, storageDir, {}, async (client) => {
+      const first = await callJson(client, "describe_table", { full_name: "main.sales.orders" });
+      assert.equal(first.fullName, "main.sales.orders");
+      assert.equal(first.cache.status, "miss");
+      assert.equal((await callJson(client, "describe_table", { full_name: "main.sales.orders" })).cache.status, "hit");
+    });
   } finally {
     await stub.close();
     await rm(storageDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });

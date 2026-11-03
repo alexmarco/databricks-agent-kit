@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMetadataService } from "../src/metadata.ts";
 import { openMetadataCache, type MetadataCache } from "../src/metadata-cache.ts";
+import { loadDatabaseSync } from "../src/sqlite.ts";
 import type { DatabricksClient, QueryValue } from "../src/client.ts";
 import { InvalidArgumentError } from "../src/errors.ts";
 import type { ExecuteSqlRequest, StatementLifecycle, StatementResult } from "../src/statements.ts";
@@ -276,15 +277,22 @@ interface CacheContext {
   /** Opens the cache of one identity on the shared `cache.db`; every cache is closed at the end of the test. */
   open(options?: { identity?: string; ttlSeconds?: number }): Promise<MetadataCache>;
   clock: { now: number };
+  /** Path of the shared `cache.db`. */
+  path: string;
+  /** Warnings the caches reported, as their messages. */
+  warnings: string[];
 }
 
 async function withCache(run: (context: CacheContext) => Promise<void>) {
   const dir = await mkdtemp(join(tmpdir(), "dak-cache-"));
   const clock = { now: CACHE_START };
   const opened: MetadataCache[] = [];
+  const warnings: string[] = [];
+  const path = join(dir, "cache.db");
   const open: CacheContext["open"] = async (options = {}) => {
     const cache = await openMetadataCache({
-      path: join(dir, "cache.db"),
+      path,
+      warn: (message) => warnings.push(message),
       identity: options.identity ?? "identity-a",
       ttlSeconds: options.ttlSeconds ?? 3600,
       now: () => clock.now,
@@ -293,7 +301,7 @@ async function withCache(run: (context: CacheContext) => Promise<void>) {
     return cache;
   };
   try {
-    await run({ open, clock });
+    await run({ open, clock, path, warnings });
   } finally {
     for (const cache of opened) cache.close();
     await rm(dir, { recursive: true, force: true });
@@ -478,4 +486,89 @@ test("cache.db is readable only by its owner", { skip: process.platform === "win
     cache.close();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("a corrupt cache.db is recreated and the call answers normally", async () => {
+  await withCache(async ({ open, path, warnings }) => {
+    await writeFile(path, "this is not a SQLite database, just text".repeat(100));
+    const { client } = fakeClient(cachedTableRoute());
+    const metadata = createMetadataService(client, noStatements, await open());
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "miss");
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "hit");
+    assert.equal(warnings.length, 0, "a recreated file is not a failure");
+  });
+});
+
+test("a cache.db with another schema version is recreated, so its entries are not served", async () => {
+  await withCache(async ({ open, path }) => {
+    const { client, calls } = fakeClient(cachedTableRoute());
+    const first = await open();
+    await createMetadataService(client, noStatements, first).describeTable("main.s.t");
+    first.close();
+    const Database = await loadDatabaseSync();
+    const upgraded = new Database(path);
+    upgraded.exec("PRAGMA user_version = 99");
+    upgraded.close();
+    const metadata = createMetadataService(client, noStatements, await open());
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "miss");
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "hit");
+    assert.equal(calls.length, 2);
+  });
+});
+
+/** Breaks the cache file from outside, as a damaged file would. */
+async function breakCacheFile(path: string) {
+  const Database = await loadDatabaseSync();
+  const other = new Database(path);
+  other.exec("DROP TABLE cache_entries");
+  other.close();
+}
+
+test("a cache that fails to read or write answers from Databricks as bypassed, with a warning", async () => {
+  await withCache(async ({ open, path, warnings }) => {
+    const { client, calls } = fakeClient(cachedTableRoute({ comment: "Orders" }));
+    const metadata = createMetadataService(client, noStatements, await open());
+    await metadata.describeTable("main.s.t");
+    await breakCacheFile(path);
+    const answer = await metadata.describeTable("main.s.t");
+    assert.equal(answer.cache?.status, "bypassed");
+    assert.equal(answer.comment, "Orders", "the answer is the one from Databricks");
+    assert.equal(calls.length, 2);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0] ?? "", /cache/i);
+  });
+});
+
+test("a bypassed answer is not counted in the entry counters", async () => {
+  await withCache(async ({ open, path, clock, warnings }) => {
+    const cache = await open({ ttlSeconds: 600 });
+    const metadata = createMetadataService(fakeClient(cachedTableRoute()).client, noStatements, cache);
+    await metadata.describeTable("main.s.t");
+    const Database = await loadDatabaseSync();
+    const other = new Database(path);
+    other.exec("CREATE TRIGGER no_update BEFORE UPDATE ON cache_entries BEGIN SELECT RAISE(ABORT, 'read-only'); END;");
+    other.close();
+    clock.now += 11 * MINUTE;
+    assert.equal(
+      (await metadata.describeTable("main.s.t")).cache?.status,
+      "bypassed",
+      "the entry could be read but not replaced",
+    );
+    assert.equal(warnings.length, 1);
+    const entry = cache.entry("table", "main.s.t");
+    assert.equal(entry?.expirations, 0);
+    assert.equal(entry?.reloadsUnchanged, 0);
+    assert.equal(entry?.misses, 1);
+  });
+});
+
+test("a cache that fails still returns the error of a failed load", async () => {
+  await withCache(async ({ open, path }) => {
+    const { client, state } = flakyClient(cachedTableRoute());
+    const metadata = createMetadataService(client, noStatements, await open());
+    await breakCacheFile(path);
+    await assert.rejects(metadata.describeTable("main.s.t"), /PERMISSION_DENIED/);
+    state.failing = false;
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "bypassed");
+  });
 });

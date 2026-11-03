@@ -78,8 +78,9 @@ Catalog comments and keys, the better the agent's SQL.
   returns no tags, sample or lineage: ask for a sample with `execute_sql`. Times are ISO 8601.
 - **Metadata cache.** `describe_table` answers from `cache.db` while the entry is fresh, without a request to Databricks.
   The `cache` field of the answer has the `status`, which is `hit` (served from a fresh entry), `miss` (no entry yet),
-  `expired` (reloaded after the TTL) or `refreshed` (reloaded because of `refresh: true`), and `cachedAt`, the ISO 8601 time
-  the answer was loaded. Pass `refresh: true` when you suspect the table changed, for example after a DDL statement: the
+  `expired` (reloaded after the TTL), `refreshed` (reloaded because of `refresh: true`) or `bypassed` (the cache could not
+  be read or written, so the answer came straight from Databricks and a `warn` is logged), and `cachedAt`, the ISO 8601
+  time the answer was loaded. Pass `refresh: true` when you suspect the table changed, for example after a DDL statement: the
   fresh answer replaces the entry. An error is never cached, and a failed reload returns the error, never the old answer.
   The TTL is `DAK_CACHE_TTL`, see [configuration](/guide/configuration). With `DAK_CACHE_TTL=0` the answers have no `cache`
   field.

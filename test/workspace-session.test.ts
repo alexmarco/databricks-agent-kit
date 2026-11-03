@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { AuthProvider } from "../src/auth.ts";
+import { loadDatabaseSync } from "../src/sqlite.ts";
 import type { DatabricksClient, QueryValue } from "../src/client.ts";
 import { AuthError, DakError } from "../src/errors.ts";
 import { ReadOnlyViolationError } from "../src/statements.ts";
@@ -338,6 +339,34 @@ test("the metadata cache is shared across sessions of one identity and its statu
     assert.equal(statusOf("first_miss"), "miss");
     assert.equal(statusOf("first_hit"), "hit");
     assert.equal(statusOf("second_hit"), "hit");
+  });
+});
+
+test("a cache that fails is a warn in the log and a bypassed answer, never a tool error", async () => {
+  await withLogs("stdio", async ({ logs, repository, dir }) => {
+    const options = { ...sessionOptions(dir, logs), cache: cacheOptions(dir, 3600) };
+    const session = createWorkspaceSession(adapters().adapters, options);
+    const describe = (toolName: string) =>
+      session.scope.run({ toolName }, async () => (await session.workspace()).metadata.describeTable("main.s.t"), {
+        message: "Tool call completed",
+      });
+    assert.equal((await describe("healthy")).cache?.status, "miss");
+    const Database = await loadDatabaseSync();
+    const other = new Database(join(dir, "cache.db"));
+    other.exec("DROP TABLE cache_entries");
+    other.close();
+    assert.equal((await describe("damaged")).cache?.status, "bypassed");
+    await session.close();
+
+    logs.flush();
+    const execution = repository.recentExecutions(50).find((candidate) => candidate.toolName === "damaged");
+    assert.equal(execution?.status, "completed");
+    const entries = repository.executionDetail(execution?.executionId ?? "")?.logs ?? [];
+    assert.deepEqual(
+      entries.filter((entry) => entry.level === "warn").map((entry) => entry.message),
+      ["Metadata cache cannot be read; answering from Databricks"],
+    );
+    assert.equal(entries.find((entry) => entry.message === "Tool call completed")?.metadata?.cacheStatus, "bypassed");
   });
 });
 

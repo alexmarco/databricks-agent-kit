@@ -137,6 +137,7 @@ export function createWorkspaceSession(
         ttlSeconds: options.cache.ttlSeconds,
         identity: connection.auth.cacheIdentity,
         scope,
+        warn: (message, metadata, error) => options.logs.current().warn(message, metadata, error),
       });
     }
     return {

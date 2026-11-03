@@ -237,8 +237,8 @@ Details that the table leaves out:
 - `describe_table` makes one Unity Catalog API call and no SQL statement, so it works with no running warehouse. It does not
   return tags, a data sample or lineage: ask for a sample with `execute_sql`.
 - `describe_table` answers from the metadata cache (`cache.db` in the storage directory) while the entry is fresh, with no
-  request to Databricks. Its `cache` field gives the `status` (`hit`, `miss`, `expired` or `refreshed`) and `cachedAt`,
-  the time the answer was loaded from Databricks. `refresh: true` skips the entry and replaces it with the current
+  request to Databricks. Its `cache` field gives the `status` (`hit`, `miss`, `expired`, `refreshed` or `bypassed`, when
+  the cache failed and the answer came straight from Databricks) and `cachedAt`, the time the answer was loaded. `refresh: true` skips the entry and replaces it with the current
   answer; use it after changing a table. Entries are fresh for `DAK_CACHE_TTL` seconds (24 hours by default; `0` disables
   the cache and the `cache` field) and are kept apart for each credential. An error from Databricks is never cached and
   never replaced by an old answer.

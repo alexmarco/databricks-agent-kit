@@ -1,12 +1,15 @@
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ExecutionScope } from "./execution-scope.ts";
 import { loadDatabaseSync } from "./sqlite.ts";
 
 /** What a cache entry holds: a table description or the full listing of one level (ADR 0021). */
 export type CacheKind = "table" | "listing";
-/** How an answer was served: from a fresh entry, loaded because none existed or it expired, or reloaded on request. */
-export type CacheStatus = "hit" | "miss" | "expired" | "refreshed";
+/**
+ * How an answer was served: from a fresh entry, loaded because none existed or it expired, reloaded on request, or
+ * loaded with no cache because the cache failed.
+ */
+export type CacheStatus = "hit" | "miss" | "expired" | "refreshed" | "bypassed";
 
 /** The `cache` field of a cached tool answer; `cachedAt` is the load time in ISO 8601. */
 export interface CacheInfo {
@@ -35,6 +38,8 @@ export interface MetadataCacheOptions {
   now?: () => number;
   /** Receives the cache status of each lookup for the final log entry of the current execution (ADR 0013). */
   scope?: Pick<ExecutionScope, "annotate">;
+  /** Reports a cache failure; the cache never fails a lookup, it answers from Databricks instead. */
+  warn?: (message: string, metadata?: Record<string, unknown>, error?: unknown) => void;
 }
 
 /** Persistent cache of Databricks metadata answers (ADR 0021). */
@@ -42,7 +47,7 @@ export interface MetadataCache {
   /**
    * Serves the entry of `kind` and `key` (case-insensitive) when it is fresh and `refresh` is not set; otherwise runs
    * `load`, stores its value and serves it. A failed `load` stores nothing and rejects, so an error is never cached and
-   * an old value is never served in its place.
+   * an old value is never served in its place. When the cache itself fails, the value is loaded and served as `bypassed`.
    */
   lookup<T>(
     kind: CacheKind,
@@ -80,18 +85,59 @@ PRAGMA user_version = ${SCHEMA_VERSION};
 
 type Row = Record<string, unknown>;
 
-/** Opens (creating it if needed) the cache database, in WAL mode and readable only by its owner outside Windows. */
+const FILE_SUFFIXES = ["", "-wal", "-shm"];
+
+/** Opens the database at `path` with the current schema; throws when the file is not a usable cache of this version. */
+async function openDatabase(path: string) {
+  const Database = await loadDatabaseSync();
+  const db = new Database(path);
+  try {
+    // Owner-only access; SQLite creates the -wal and -shm files with the database file's permissions.
+    if (process.platform !== "win32") chmodSync(path, 0o600);
+    db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
+    const version = Number((db.prepare("PRAGMA user_version").get() as Row).user_version);
+    if (version !== 0 && version !== SCHEMA_VERSION) throw new Error(`cache.db has schema version ${version}`);
+    db.exec(SCHEMA);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+
+/**
+ * Opens (creating it if needed) the cache database, in WAL mode and readable only by its owner outside Windows. A file
+ * that cannot be used, such as a corrupt one or one of another schema version, is deleted and created again once; if the
+ * cache still cannot be opened, every lookup answers from Databricks as `bypassed`.
+ */
 export async function openMetadataCache(options: MetadataCacheOptions): Promise<MetadataCache> {
   const { identity } = options;
   const now = options.now ?? Date.now;
   const ttlMs = options.ttlSeconds * 1000;
+  const warn = options.warn ?? (() => undefined);
+  const isoTime = (milliseconds: unknown) => new Date(Number(milliseconds)).toISOString();
+  const bypassed = <T>(value: T): { value: T; cache: CacheInfo } => {
+    options.scope?.annotate({ cacheStatus: "bypassed" });
+    return { value, cache: { status: "bypassed", cachedAt: isoTime(now()) } };
+  };
+
   mkdirSync(dirname(options.path), { recursive: true, mode: 0o700 });
-  const Database = await loadDatabaseSync();
-  const db = new Database(options.path);
-  // Owner-only access; SQLite creates the -wal and -shm files with the database file's permissions.
-  if (process.platform !== "win32") chmodSync(options.path, 0o600);
-  db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
-  db.exec(SCHEMA);
+  let db: Awaited<ReturnType<typeof openDatabase>>;
+  try {
+    try {
+      db = await openDatabase(options.path);
+    } catch {
+      for (const suffix of FILE_SUFFIXES) rmSync(options.path + suffix, { force: true });
+      db = await openDatabase(options.path);
+    }
+  } catch (error) {
+    warn("Metadata cache cannot be opened; answering from Databricks", { path: options.path }, error);
+    return {
+      lookup: async (_kind, _key, load) => bypassed(await load()),
+      entry: () => undefined,
+      close: () => undefined,
+    };
+  }
 
   const select = db.prepare("SELECT * FROM cache_entries WHERE identity = ? AND kind = ? AND key = ?");
   const touch = db.prepare(
@@ -113,7 +159,7 @@ export async function openMetadataCache(options: MetadataCacheOptions): Promise<
        reloads_unchanged = reloads_unchanged + excluded.reloads_unchanged`,
   );
 
-  const isoTime = (milliseconds: unknown) => new Date(Number(milliseconds)).toISOString();
+  let closed = false;
 
   return {
     async lookup<T>(
@@ -123,36 +169,45 @@ export async function openMetadataCache(options: MetadataCacheOptions): Promise<
       lookupOptions: { refresh?: boolean | undefined } = {},
     ) {
       const normalizedKey = key.toLowerCase();
-      const row = select.get(identity, kind, normalizedKey) as Row | undefined;
       const readAt = now();
-      if (row !== undefined && lookupOptions.refresh !== true && readAt < Number(row.loaded_at) + ttlMs) {
-        touch.run(readAt, identity, kind, normalizedKey);
-        options.scope?.annotate({ cacheStatus: "hit" });
-        return {
-          value: JSON.parse(row.value as string) as T,
-          cache: { status: "hit" as const, cachedAt: isoTime(row.loaded_at) },
-        };
+      let row: Row | undefined;
+      try {
+        row = select.get(identity, kind, normalizedKey) as Row | undefined;
+        if (row !== undefined && lookupOptions.refresh !== true && readAt < Number(row.loaded_at) + ttlMs) {
+          const value = JSON.parse(row.value as string) as T;
+          touch.run(readAt, identity, kind, normalizedKey);
+          options.scope?.annotate({ cacheStatus: "hit" });
+          return { value, cache: { status: "hit" as const, cachedAt: isoTime(row.loaded_at) } };
+        }
+      } catch (error) {
+        warn("Metadata cache cannot be read; answering from Databricks", undefined, error);
+        return bypassed(await load());
       }
       const status: CacheStatus = lookupOptions.refresh === true ? "refreshed" : row === undefined ? "miss" : "expired";
       const value = await load();
       const loadedAt = now();
       const serialized = JSON.stringify(value);
       const changed = row !== undefined && row.value !== serialized;
-      upsert.run(
-        identity,
-        kind,
-        normalizedKey,
-        serialized,
-        loadedAt,
-        loadedAt,
-        loadedAt,
-        loadedAt - readAt,
-        status === "miss" ? 1 : 0,
-        status === "expired" ? 1 : 0,
-        status === "refreshed" ? 1 : 0,
-        changed ? 1 : 0,
-        row !== undefined && !changed ? 1 : 0,
-      );
+      try {
+        upsert.run(
+          identity,
+          kind,
+          normalizedKey,
+          serialized,
+          loadedAt,
+          loadedAt,
+          loadedAt,
+          loadedAt - readAt,
+          status === "miss" ? 1 : 0,
+          status === "expired" ? 1 : 0,
+          status === "refreshed" ? 1 : 0,
+          changed ? 1 : 0,
+          row !== undefined && !changed ? 1 : 0,
+        );
+      } catch (error) {
+        warn("Metadata cache cannot be written; answering from Databricks", undefined, error);
+        return bypassed(value);
+      }
       options.scope?.annotate({ cacheStatus: status });
       return { value, cache: { status, cachedAt: isoTime(loadedAt) } };
     },
@@ -169,6 +224,9 @@ export async function openMetadataCache(options: MetadataCacheOptions): Promise<
         reloadsUnchanged: Number(row.reloads_unchanged),
       };
     },
-    close: () => db.close(),
+    close: () => {
+      if (!closed) db.close();
+      closed = true;
+    },
   };
 }
