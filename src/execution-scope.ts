@@ -1,4 +1,5 @@
 import type { ExecutionHandle, ExecutionTarget, LogService } from "./logging/service.ts";
+import type { CacheStatus } from "./metadata-cache.ts";
 
 /** Timings and choices that code running inside a scope reports for the final log entry of that scope (ADR 0013). */
 export interface ExecutionDiagnostics {
@@ -6,6 +7,8 @@ export interface ExecutionDiagnostics {
   checkMs?: number;
   /** Warehouse an export was submitted to. */
   warehouseId?: string;
+  /** How the metadata cache served the answer of the call. */
+  cacheStatus?: CacheStatus;
 }
 
 /** Thrown by the work of a scope to end its execution as `cancelled` instead of `failed`; the scope rethrows it. */

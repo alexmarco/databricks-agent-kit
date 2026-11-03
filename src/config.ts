@@ -33,6 +33,8 @@ export interface Settings {
   storageDir: string;
   exportDir: string;
   exportMaxBytes: number;
+  /** Seconds a metadata cache entry is fresh; 0 disables the cache. */
+  cacheTtlSeconds: number;
   logLevel: LogLevel;
 }
 
@@ -65,6 +67,15 @@ function parsePositiveInteger(value: string, name: string): number {
     throw new ConfigError(`${name} must be a positive integer, got '${value}'.`);
   }
   return parsed;
+}
+
+function parseCacheTtl(value: string): number {
+  if (!/^\d+$/.test(value)) {
+    throw new ConfigError(
+      `DAK_CACHE_TTL must be a whole number of seconds, 0 or more (0 disables the cache), got '${value}'.`,
+    );
+  }
+  return Number(value);
 }
 
 function parseLogLevel(value: string): LogLevel {
@@ -107,6 +118,7 @@ export function resolveSettings(flags: CliFlags, env: Environment, defaultStorag
       env.DAK_EXPORT_MAX_BYTES === undefined
         ? 10 * 1024 ** 3
         : parsePositiveInteger(env.DAK_EXPORT_MAX_BYTES, "DAK_EXPORT_MAX_BYTES"),
+    cacheTtlSeconds: env.DAK_CACHE_TTL === undefined ? 86_400 : parseCacheTtl(env.DAK_CACHE_TTL),
     logLevel: env.DAK_LOG_LEVEL === undefined ? "info" : parseLogLevel(env.DAK_LOG_LEVEL),
   };
 }

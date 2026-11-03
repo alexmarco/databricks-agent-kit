@@ -241,7 +241,7 @@ test("metadata tools delegate to the metadata service", async () => {
   });
 });
 
-test("describe_table no longer accepts sample_rows or lineage and only passes the table name on", async () => {
+test("describe_table no longer accepts sample_rows or lineage and passes only the table name and refresh on", async () => {
   await withLogs("stdio", async (context) => {
     const connection = await connect(context);
     const result = await connection.client.callTool({
@@ -252,12 +252,29 @@ test("describe_table no longer accepts sample_rows or lineage and only passes th
     const described = JSON.parse(text(result));
     assert.equal(described.sample, undefined);
     assert.equal(described.lineage, undefined);
-    assert.deepEqual(connection.services.describeCalls, [["main.s.t"]]);
+    assert.deepEqual(
+      connection.services.describeCalls.map(([name, options]) => [name, (options as { refresh?: boolean }).refresh]),
+      [["main.s.t", undefined]],
+    );
     const { tools } = await connection.client.listTools();
     const describeTool = tools.find((tool) => tool.name === "describe_table");
-    assert.deepEqual(Object.keys(describeTool?.inputSchema.properties ?? {}), ["full_name"]);
+    assert.deepEqual(Object.keys(describeTool?.inputSchema.properties ?? {}), ["full_name", "refresh"]);
     assert.doesNotMatch(describeTool?.description ?? "", /tag|sample|lineage/i);
     assert.doesNotMatch(connection.client.getInstructions() ?? "", /tag|sample|lineage/i);
+    await closeAll(connection);
+  });
+});
+
+test("describe_table passes refresh to the metadata service and its description tells about it", async () => {
+  await withLogs("stdio", async (context) => {
+    const connection = await connect(context);
+    await connection.client.callTool({ name: "describe_table", arguments: { full_name: "main.s.t", refresh: true } });
+    const [name, options] = connection.services.describeCalls[0] ?? [];
+    assert.equal(name, "main.s.t");
+    assert.equal((options as { refresh?: boolean }).refresh, true);
+    const { tools } = await connection.client.listTools();
+    assert.match(tools.find((tool) => tool.name === "describe_table")?.description ?? "", /refresh/);
+    assert.match(connection.client.getInstructions() ?? "", /refresh/);
     await closeAll(connection);
   });
 });

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { AuthProvider } from "../src/auth.ts";
 import type { DatabricksClient, QueryValue } from "../src/client.ts";
@@ -19,6 +20,7 @@ const auth: AuthProvider = {
   host: "https://ws",
   method: "pat",
   profileWarehouseId: undefined,
+  cacheIdentity: "test-identity",
   getToken: async () => "t",
 };
 
@@ -43,6 +45,8 @@ function fakeWorkspace() {
         ? { statement_id: "st-export", status: { state: "PENDING" } }
         : succeeded;
     }
+    if (method === "GET" && path === "/api/2.1/unity-catalog/tables/main.s.t")
+      return { full_name: "main.s.t", columns: [] };
     if (method === "POST" && path.endsWith("/cancel")) return {};
     throw new Error(`unexpected ${method} ${path}`);
   };
@@ -301,4 +305,62 @@ test("connecting without a log service resolves the credentials and builds the m
 test("connecting fails with the authentication error and keeps nothing", async () => {
   const { adapters: fake } = adapters(undefined, 1);
   await assert.rejects(connectWorkspace(fake, { limits }), AuthError);
+});
+
+const cacheOptions = (dir: string, ttlSeconds: number) => ({ path: join(dir, "cache.db"), ttlSeconds });
+const tableRequests = (calls: Array<{ path: string }>) => calls.filter((call) => call.path.includes("/tables/")).length;
+
+test("the metadata cache is shared across sessions of one identity and its status reaches the final log entry", async () => {
+  await withLogs("stdio", async ({ logs, repository, dir }) => {
+    const options = { ...sessionOptions(dir, logs), cache: cacheOptions(dir, 3600) };
+    const first = adapters();
+    const firstSession = createWorkspaceSession(first.adapters, options);
+    const describe = async (session: ReturnType<typeof createWorkspaceSession>, toolName: string) =>
+      session.scope.run({ toolName }, async () => (await session.workspace()).metadata.describeTable("main.s.t"), {
+        message: "Tool call completed",
+      });
+    assert.equal((await describe(firstSession, "first_miss")).cache?.status, "miss");
+    assert.equal((await describe(firstSession, "first_hit")).cache?.status, "hit");
+    await firstSession.close();
+
+    const second = adapters();
+    const secondSession = createWorkspaceSession(second.adapters, options);
+    assert.equal((await describe(secondSession, "second_hit")).cache?.status, "hit");
+    await secondSession.close();
+    assert.equal(tableRequests(first.workspace.calls) + tableRequests(second.workspace.calls), 1);
+
+    logs.flush();
+    const statusOf = (toolName: string) => {
+      const execution = repository.recentExecutions(50).find((candidate) => candidate.toolName === toolName);
+      const entries = repository.executionDetail(execution?.executionId ?? "")?.logs ?? [];
+      return entries.find((entry) => entry.message === "Tool call completed")?.metadata?.cacheStatus;
+    };
+    assert.equal(statusOf("first_miss"), "miss");
+    assert.equal(statusOf("first_hit"), "hit");
+    assert.equal(statusOf("second_hit"), "hit");
+  });
+});
+
+test("a session with the cache disabled opens no cache.db and its answers carry no cache field", async () => {
+  await withLogs("stdio", async ({ logs, dir }) => {
+    const { adapters: fake } = adapters();
+    const session = createWorkspaceSession(fake, { ...sessionOptions(dir, logs), cache: cacheOptions(dir, 0) });
+    const description = await (await session.workspace()).metadata.describeTable("main.s.t");
+    assert.equal(description.cache, undefined);
+    await session.close();
+    await assert.rejects(stat(join(dir, "cache.db")), { code: "ENOENT" });
+  });
+});
+
+test("sessions of different cache identities keep separate entries on the same file", async () => {
+  await withLogs("stdio", async ({ logs, dir }) => {
+    const options = { ...sessionOptions(dir, logs), cache: cacheOptions(dir, 3600) };
+    const other = adapters(undefined, 0, { ...auth, cacheIdentity: "another-identity" });
+    const first = createWorkspaceSession(adapters().adapters, options);
+    const second = createWorkspaceSession(other.adapters, options);
+    assert.equal((await (await first.workspace()).metadata.describeTable("main.s.t")).cache?.status, "miss");
+    assert.equal((await (await second.workspace()).metadata.describeTable("main.s.t")).cache?.status, "miss");
+    await first.close();
+    await second.close();
+  });
 });

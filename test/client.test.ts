@@ -8,6 +8,7 @@ const auth: AuthProvider = {
   host: "https://ws.example",
   method: "pat",
   profileWarehouseId: undefined,
+  cacheIdentity: "test-identity",
   getToken: async () => "tok-secret",
 };
 

@@ -5,6 +5,7 @@ import { createExecutionScope, type ExecutionScope } from "./execution-scope.ts"
 import { createExportManager, type ExportManager } from "./export/manager.ts";
 import type { LogService } from "./logging/service.ts";
 import { createMetadataService, type MetadataService } from "./metadata.ts";
+import { openMetadataCache, type MetadataCache } from "./metadata-cache.ts";
 import { createStatementLifecycle, type StatementLifecycle, type StatementLifecycleOptions } from "./statements.ts";
 import { createWarehouseSelection, type WarehouseSelection } from "./warehouses.ts";
 
@@ -53,6 +54,8 @@ export interface WorkspaceSessionOptions {
   limits: WorkspaceLimits;
   logs: LogService;
   exportDir: string;
+  /** The metadata cache file and TTL (ADR 0021); without it, or with a TTL of 0, no cache is opened. */
+  cache?: { path: string; ttlSeconds: number };
 }
 
 /** Lazily created workspace of one server process (ADR 0014). */
@@ -113,6 +116,7 @@ export function createWorkspaceSession(
   const scope = createExecutionScope(options.logs);
   let pending: Promise<Workspace> | undefined;
   let closed = false;
+  let cache: MetadataCache | undefined;
 
   const build = async (): Promise<Workspace> => {
     const connection = await connectWorkspace(adapters, {
@@ -127,7 +131,19 @@ export function createWorkspaceSession(
       scope,
       sleep: adapters.sleep,
     });
-    return { ...connection, metadata: createMetadataService(connection.client, connection.statements), exports };
+    if (options.cache !== undefined && options.cache.ttlSeconds > 0) {
+      cache = await openMetadataCache({
+        path: options.cache.path,
+        ttlSeconds: options.cache.ttlSeconds,
+        identity: connection.auth.cacheIdentity,
+        scope,
+      });
+    }
+    return {
+      ...connection,
+      metadata: createMetadataService(connection.client, connection.statements, cache),
+      exports,
+    };
   };
 
   return {
@@ -145,6 +161,7 @@ export function createWorkspaceSession(
       // A build in flight is awaited, so its exports are closed too; a failed one has nothing to close.
       const workspace = await pending?.catch(() => undefined);
       await workspace?.exports.close();
+      cache?.close();
     },
   };
 }

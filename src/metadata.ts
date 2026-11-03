@@ -1,5 +1,6 @@
 import type { DatabricksClient, QueryValue } from "./client.ts";
 import { InvalidArgumentError } from "./errors.ts";
+import type { CacheInfo, MetadataCache } from "./metadata-cache.ts";
 import type { StatementLifecycle, StatementResult } from "./statements.ts";
 
 const MAX_PAGES = 50;
@@ -44,6 +45,8 @@ export interface TableDescription {
   updatedAt?: string;
   updatedBy?: string;
   notes?: string[];
+  /** How the answer was served; absent when the cache is disabled. */
+  cache?: CacheInfo;
 }
 
 /** Table (`kind` = `table`, `column` null) or column whose name or comment matched the search. */
@@ -122,7 +125,11 @@ const clamp = (value: number | undefined, fallback: number, max: number): number
  * Creates the Unity Catalog metadata service: REST listings and descriptions, plus the information_schema search
  * that the server writes itself (it skips the read-only check).
  */
-export function createMetadataService(client: DatabricksClient, statements: Pick<StatementLifecycle, "query">) {
+export function createMetadataService(
+  client: DatabricksClient,
+  statements: Pick<StatementLifecycle, "query">,
+  cache?: MetadataCache,
+) {
   async function paginate<T>(path: string, key: string, query: Record<string, QueryValue>): Promise<T[]> {
     const items: T[] = [];
     let pageToken: string | undefined;
@@ -176,9 +183,8 @@ export function createMetadataService(client: DatabricksClient, statements: Pick
     return { level, items: matching.slice(0, limit), truncated: matching.length > limit };
   }
 
-  /** Describes a table with the one Unity Catalog `GET`; it starts no warehouse. */
-  async function describeTable(fullName: string): Promise<TableDescription> {
-    splitName(fullName);
+  /** Reads a table description with the one Unity Catalog `GET`; it starts no warehouse. */
+  async function loadTable(fullName: string): Promise<TableDescription> {
     const table = await client.get<ApiTable>(`/api/2.1/unity-catalog/tables/${encodeURIComponent(fullName)}`);
 
     const columns = (table.columns ?? []).map(
@@ -222,6 +228,17 @@ export function createMetadataService(client: DatabricksClient, statements: Pick
       ...(table.updated_at === undefined ? {} : { updatedAt: new Date(table.updated_at).toISOString() }),
       ...(table.updated_by === undefined ? {} : { updatedBy: table.updated_by }),
     };
+  }
+
+  /** Describes a table, from the cache when it holds a fresh entry (`refresh` skips it). */
+  async function describeTable(
+    fullName: string,
+    options: { refresh?: boolean | undefined } = {},
+  ): Promise<TableDescription> {
+    splitName(fullName);
+    if (cache === undefined) return loadTable(fullName);
+    const { value, cache: info } = await cache.lookup("table", fullName, () => loadTable(fullName), options);
+    return { ...value, cache: info };
   }
 
   async function searchMetadata(request: {

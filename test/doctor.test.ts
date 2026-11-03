@@ -34,6 +34,7 @@ const settings: Settings = {
   storageDir: "C:/tmp/dak",
   exportDir: "C:/tmp/dak/exports",
   exportMaxBytes: 10 * 1024 ** 3,
+  cacheTtlSeconds: 86_400,
   logLevel: "info",
 };
 
@@ -41,6 +42,7 @@ const auth: AuthProvider = {
   host: "https://ws",
   method: "oauth-u2m",
   profileWarehouseId: undefined,
+  cacheIdentity: "test-identity",
   getToken: async () => "t",
 };
 

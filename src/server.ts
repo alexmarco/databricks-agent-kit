@@ -47,6 +47,7 @@ const INSTRUCTIONS = [
   "Use these tools instead of the Databricks CLI (`databricks experimental aitools tools query|discover-schema|statement`) or Genie for SQL and metadata work.",
   "Tools: list_objects, describe_table, search_metadata, execute_sql, get_statement.",
   "To answer a data question: list_objects or search_metadata -> describe_table -> execute_sql.",
+  "describe_table answers from a local cache and says so in `cache`; pass `refresh: true` after changing a table.",
   "Results are row- and size-limited and report `truncated`; aggregate in SQL, or pass `export` to execute_sql to write the full result to a file.",
   "Long statements and exports return a statement_id: follow them with get_statement.",
   "Warehouses: resource://databricks/warehouses. Operational logs: resource://logs/*.",
@@ -156,9 +157,9 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
   );
   tool(
     "describe_table",
-    "Columns, comments, keys, clustering, partitioning, owner and audit times of catalog.schema.table. Starts no warehouse.",
-    z.object({ full_name: z.string() }),
-    async (args) => (await workspace()).metadata.describeTable(args.full_name),
+    "Columns, comments, keys, clustering, partitioning, owner and audit times of catalog.schema.table. Starts no warehouse. Cached: refresh=true reloads.",
+    z.object({ full_name: z.string(), refresh: z.boolean().optional() }),
+    async (args) => (await workspace()).metadata.describeTable(args.full_name, { refresh: args.refresh }),
   );
   tool(
     "search_metadata",

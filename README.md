@@ -222,13 +222,13 @@ Clients point at the URL, for example `claude mcp add --transport http databrick
 
 Five tools keep the definitions under 2,500 characters in total, so they cost little context in every session.
 
-| Tool              | Parameters                                                                                  | Purpose                                                                                                                                                             |
-| ----------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list_objects`    | `catalog?`, `schema?`, `pattern?`, `limit?`                                                 | Without arguments, catalogs; with `catalog`, its schemas; with `catalog` and `schema`, its tables. `pattern` is a substring or glob                                 |
-| `describe_table`  | `full_name`                                                                                 | Columns, comments, primary/foreign keys, clustering, partitioning, owner and created/updated time and user. One Unity Catalog API call: it never starts a warehouse |
-| `search_metadata` | `query`, `catalog?`, `limit?`                                                               | Find tables and columns by name or comment                                                                                                                          |
-| `execute_sql`     | `statement`, `parameters?`, `catalog?`, `schema?`, `row_limit?`, `warehouse_id?`, `export?` | One statement with `:name` parameters and bounded results; with `export`, the full result goes to a file                                                            |
-| `get_statement`   | `statement_id`, `wait_seconds?`, `cancel?`                                                  | Follow up on a statement still running after 30 s or on an export (`wait_seconds` from 0 to 30), or cancel it with `cancel: true`                                   |
+| Tool              | Parameters                                                                                  | Purpose                                                                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_objects`    | `catalog?`, `schema?`, `pattern?`, `limit?`                                                 | Without arguments, catalogs; with `catalog`, its schemas; with `catalog` and `schema`, its tables. `pattern` is a substring or glob                                         |
+| `describe_table`  | `full_name`, `refresh?`                                                                     | Columns, comments, primary/foreign keys, clustering, partitioning, owner and created/updated time and user. One Unity Catalog API call: it never starts a warehouse. Cached |
+| `search_metadata` | `query`, `catalog?`, `limit?`                                                               | Find tables and columns by name or comment                                                                                                                                  |
+| `execute_sql`     | `statement`, `parameters?`, `catalog?`, `schema?`, `row_limit?`, `warehouse_id?`, `export?` | One statement with `:name` parameters and bounded results; with `export`, the full result goes to a file                                                                    |
+| `get_statement`   | `statement_id`, `wait_seconds?`, `cancel?`                                                  | Follow up on a statement still running after 30 s or on an export (`wait_seconds` from 0 to 30), or cancel it with `cancel: true`                                           |
 
 Details that the table leaves out:
 
@@ -236,6 +236,12 @@ Details that the table leaves out:
   without `catalog` is an error. `search_metadata` returns 50 matches by default (maximum 200).
 - `describe_table` makes one Unity Catalog API call and no SQL statement, so it works with no running warehouse. It does not
   return tags, a data sample or lineage: ask for a sample with `execute_sql`.
+- `describe_table` answers from the metadata cache (`cache.db` in the storage directory) while the entry is fresh, with no
+  request to Databricks. Its `cache` field gives the `status` (`hit`, `miss`, `expired` or `refreshed`) and `cachedAt`,
+  the time the answer was loaded from Databricks. `refresh: true` skips the entry and replaces it with the current
+  answer; use it after changing a table. Entries are fresh for `DAK_CACHE_TTL` seconds (24 hours by default; `0` disables
+  the cache and the `cache` field) and are kept apart for each credential. An error from Databricks is never cached and
+  never replaced by an old answer.
 - `parameters` is a list of `{ name, value, type? }`; the value is sent through the API, never interpolated into the SQL.
 
 Resource `resource://databricks/warehouses` lists the SQL warehouses visible to the identity and marks the default one.
@@ -445,6 +451,7 @@ There is no log search tool, so the log costs no context until an agent reads on
 | Log storage      | -                   | `DAK_STORAGE_DIR`                                     | Per-user state directory             |
 | Export directory | -                   | `DAK_EXPORT_DIR`                                      | `<log storage>/exports`              |
 | Export size cap  | -                   | `DAK_EXPORT_MAX_BYTES`                                | `10737418240` (10 GiB)               |
+| Cache TTL        | -                   | `DAK_CACHE_TTL`                                       | `86400` seconds; `0` disables it     |
 | Log level        | -                   | `DAK_LOG_LEVEL`                                       | `info`                               |
 
 ## Troubleshooting

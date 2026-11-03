@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createMetadataService } from "../src/metadata.ts";
+import { openMetadataCache, type MetadataCache } from "../src/metadata-cache.ts";
 import type { DatabricksClient, QueryValue } from "../src/client.ts";
 import { InvalidArgumentError } from "../src/errors.ts";
 import type { ExecuteSqlRequest, StatementLifecycle, StatementResult } from "../src/statements.ts";
@@ -263,4 +267,215 @@ test("searchMetadata surfaces a statement that did not finish instead of an empt
     createMetadataService(fakeClient({}).client, statements).searchMetadata({ query: "order" }),
     /did not finish/,
   );
+});
+
+const CACHE_START = Date.parse("2026-11-03T10:00:00.000Z");
+const MINUTE = 60_000;
+
+interface CacheContext {
+  /** Opens the cache of one identity on the shared `cache.db`; every cache is closed at the end of the test. */
+  open(options?: { identity?: string; ttlSeconds?: number }): Promise<MetadataCache>;
+  clock: { now: number };
+}
+
+async function withCache(run: (context: CacheContext) => Promise<void>) {
+  const dir = await mkdtemp(join(tmpdir(), "dak-cache-"));
+  const clock = { now: CACHE_START };
+  const opened: MetadataCache[] = [];
+  const open: CacheContext["open"] = async (options = {}) => {
+    const cache = await openMetadataCache({
+      path: join(dir, "cache.db"),
+      identity: options.identity ?? "identity-a",
+      ttlSeconds: options.ttlSeconds ?? 3600,
+      now: () => clock.now,
+    });
+    opened.push(cache);
+    return cache;
+  };
+  try {
+    await run({ open, clock });
+  } finally {
+    for (const cache of opened) cache.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+const cachedTableRoute = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+  "/api/2.1/unity-catalog/tables/main.s.t": { full_name: "main.s.t", columns: [], ...extra },
+});
+
+test("describeTable with a cache: the first call is a miss and the second a hit that makes no request", async () => {
+  await withCache(async ({ open, clock }) => {
+    const { client, calls } = fakeClient(cachedTableRoute({ comment: "Orders" }));
+    const metadata = createMetadataService(client, noStatements, await open());
+    const first = await metadata.describeTable("main.s.t");
+    assert.deepEqual(first.cache, { status: "miss", cachedAt: "2026-11-03T10:00:00.000Z" });
+    clock.now += 5 * MINUTE;
+    const second = await metadata.describeTable("main.s.t");
+    assert.deepEqual(second.cache, { status: "hit", cachedAt: "2026-11-03T10:00:00.000Z" });
+    assert.equal(calls.length, 1, "the hit makes no request to Databricks");
+    assert.deepEqual({ ...second, cache: undefined }, { ...first, cache: undefined });
+  });
+});
+
+test("describeTable with a cache: after the TTL the entry is reloaded as expired and replaced", async () => {
+  await withCache(async ({ open, clock }) => {
+    const { client, calls } = fakeClient(cachedTableRoute());
+    const metadata = createMetadataService(client, noStatements, await open({ ttlSeconds: 600 }));
+    await metadata.describeTable("main.s.t");
+    clock.now += 599_000;
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "hit");
+    clock.now += 1_000;
+    const expired = await metadata.describeTable("main.s.t");
+    assert.deepEqual(expired.cache, { status: "expired", cachedAt: "2026-11-03T10:10:00.000Z" });
+    assert.equal(calls.length, 2);
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "hit", "the reload replaced the entry");
+    assert.equal(calls.length, 2);
+  });
+});
+
+test("describeTable with a cache: a new TTL applies at once to the entries already stored", async () => {
+  await withCache(async ({ open, clock }) => {
+    const { client, calls } = fakeClient(cachedTableRoute());
+    await createMetadataService(client, noStatements, await open({ ttlSeconds: 86_400 })).describeTable("main.s.t");
+    clock.now += 30 * MINUTE;
+    const shorter = createMetadataService(client, noStatements, await open({ ttlSeconds: 600 }));
+    assert.equal((await shorter.describeTable("main.s.t")).cache?.status, "expired");
+    assert.equal(calls.length, 2);
+  });
+});
+
+test("describeTable with a cache: refresh reloads a fresh entry and replaces it", async () => {
+  await withCache(async ({ open, clock }) => {
+    const route = cachedTableRoute({ comment: "old" });
+    const { client, calls } = fakeClient(route);
+    const metadata = createMetadataService(client, noStatements, await open());
+    await metadata.describeTable("main.s.t");
+    route["/api/2.1/unity-catalog/tables/main.s.t"] = { full_name: "main.s.t", columns: [], comment: "new" };
+    clock.now += MINUTE;
+    const refreshed = await metadata.describeTable("main.s.t", { refresh: true });
+    assert.deepEqual(refreshed.cache, { status: "refreshed", cachedAt: "2026-11-03T10:01:00.000Z" });
+    assert.equal(refreshed.comment, "new");
+    assert.equal(calls.length, 2);
+    const next = await metadata.describeTable("main.s.t");
+    assert.equal(next.cache?.status, "hit");
+    assert.equal(next.comment, "new", "later lookups see the refreshed answer");
+  });
+});
+
+test("describeTable with a cache: refresh on a table never cached still loads and stores it", async () => {
+  await withCache(async ({ open }) => {
+    const { client, calls } = fakeClient(cachedTableRoute());
+    const metadata = createMetadataService(client, noStatements, await open());
+    assert.equal((await metadata.describeTable("main.s.t", { refresh: true })).cache?.status, "refreshed");
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "hit");
+    assert.equal(calls.length, 1);
+  });
+});
+
+test("the cache counts every reload as changed or unchanged by comparing the values", async () => {
+  await withCache(async ({ open, clock }) => {
+    const route = cachedTableRoute({ comment: "v1" });
+    const cache = await open({ ttlSeconds: 600 });
+    const metadata = createMetadataService(fakeClient(route).client, noStatements, cache);
+    await metadata.describeTable("main.s.t");
+    clock.now += 11 * MINUTE;
+    await metadata.describeTable("main.s.t"); // expired, same value
+    await metadata.describeTable("main.s.t", { refresh: true }); // refreshed, same value
+    route["/api/2.1/unity-catalog/tables/main.s.t"] = { full_name: "main.s.t", columns: [], comment: "v2" };
+    await metadata.describeTable("main.s.t", { refresh: true }); // refreshed, new value
+    await metadata.describeTable("main.s.t"); // hit
+    const entry = cache.entry("table", "main.s.t");
+    assert.equal(entry?.misses, 1);
+    assert.equal(entry?.expirations, 1);
+    assert.equal(entry?.refreshes, 2);
+    assert.equal(entry?.hits, 1);
+    assert.equal(entry?.reloadsUnchanged, 2);
+    assert.equal(entry?.reloadsChanged, 1);
+  });
+});
+
+test("describeTable with a cache: a table name in another case hits the same entry", async () => {
+  await withCache(async ({ open }) => {
+    const { client, calls } = fakeClient(cachedTableRoute());
+    const metadata = createMetadataService(client, noStatements, await open());
+    await metadata.describeTable("main.s.t");
+    assert.equal((await metadata.describeTable("MAIN.S.T")).cache?.status, "hit");
+    assert.equal((await metadata.describeTable("Main.S.t")).cache?.status, "hit");
+    assert.equal(calls.length, 1);
+  });
+});
+
+test("two cache identities on the same file keep separate entries and counters", async () => {
+  await withCache(async ({ open, clock }) => {
+    const { client, calls } = fakeClient(cachedTableRoute());
+    const first = await open({ identity: "identity-a" });
+    const second = await open({ identity: "identity-b" });
+    await createMetadataService(client, noStatements, first).describeTable("main.s.t");
+    assert.equal(second.entry("table", "main.s.t"), undefined, "the other identity sees nothing");
+    clock.now += MINUTE;
+    const otherMetadata = createMetadataService(client, noStatements, second);
+    assert.equal((await otherMetadata.describeTable("main.s.t")).cache?.status, "miss");
+    assert.equal(calls.length, 2, "the other identity had to load it");
+    assert.equal((await otherMetadata.describeTable("main.s.t")).cache?.status, "hit");
+    assert.equal(first.entry("table", "main.s.t")?.hits, 0);
+    assert.equal(second.entry("table", "main.s.t")?.hits, 1);
+  });
+});
+
+function flakyClient(route: Record<string, unknown>) {
+  const state = { failing: true, calls: 0 };
+  const client: DatabricksClient = {
+    host: "https://ws",
+    get: async <T>(path: string) => {
+      state.calls++;
+      if (state.failing) throw new Error("[PERMISSION_DENIED] revoked");
+      return route[path] as T;
+    },
+    post: async <T>() => ({}) as T,
+  };
+  return { client, state };
+}
+
+test("describeTable with a cache: a failed load is not stored", async () => {
+  await withCache(async ({ open }) => {
+    const cache = await open();
+    const { client, state } = flakyClient(cachedTableRoute());
+    const metadata = createMetadataService(client, noStatements, cache);
+    await assert.rejects(metadata.describeTable("main.s.t"), /PERMISSION_DENIED/);
+    assert.equal(cache.entry("table", "main.s.t"), undefined);
+    state.failing = false;
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "miss", "the table is found once it exists");
+  });
+});
+
+test("describeTable with a cache: a failed reload returns the error, never the old value", async () => {
+  await withCache(async ({ open, clock }) => {
+    const { client, state } = flakyClient(cachedTableRoute({ comment: "old" }));
+    const metadata = createMetadataService(client, noStatements, await open({ ttlSeconds: 600 }));
+    state.failing = false;
+    await metadata.describeTable("main.s.t");
+    state.failing = true;
+    clock.now += 11 * MINUTE;
+    await assert.rejects(metadata.describeTable("main.s.t"), /PERMISSION_DENIED/);
+    await assert.rejects(metadata.describeTable("main.s.t", { refresh: true }), /PERMISSION_DENIED/);
+    state.failing = false;
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "expired");
+  });
+});
+
+test("cache.db is readable only by its owner", { skip: process.platform === "win32" }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), "dak-cache-"));
+  const cache = await openMetadataCache({
+    path: join(dir, "nested", "cache.db"),
+    identity: "identity-a",
+    ttlSeconds: 60,
+  });
+  try {
+    assert.equal((await stat(join(dir, "nested", "cache.db"))).mode & 0o777, 0o600);
+    assert.equal((await stat(join(dir, "nested"))).mode & 0o777, 0o700);
+  } finally {
+    cache.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });

@@ -227,3 +227,45 @@ test("a throwing onRefresh hook never breaks token retrieval", async () => {
   );
   assert.equal(await auth.getToken(), "m2m-token");
 });
+
+async function identityOf(config: string, profile = "DEFAULT"): Promise<string> {
+  const auth = await resolveAuth({ profile, explicitProfile: false, env: {} }, deps({ config }));
+  return auth.cacheIdentity;
+}
+
+test("the cache identity is a SHA-256 hex digest that holds no secret", async () => {
+  const identity = await identityOf("[DEFAULT]\nhost=https://p\ntoken=dapi-secret-token\n");
+  assert.match(identity, /^[0-9a-f]{64}$/);
+  assert.ok(!identity.includes("dapi-secret-token"));
+});
+
+test("the cache identity is stable for the same credential and differs by host, method and credential", async () => {
+  const pat = await identityOf("[DEFAULT]\nhost=https://p\ntoken=same\n");
+  assert.equal(await identityOf("[DEFAULT]\nhost=https://p\ntoken=same\n"), pat);
+  assert.notEqual(await identityOf("[DEFAULT]\nhost=https://other\ntoken=same\n"), pat, "host");
+  assert.notEqual(await identityOf("[DEFAULT]\nhost=https://p\ntoken=different\n"), pat, "credential");
+  assert.notEqual(
+    await identityOf("[same]\nhost=https://p\nauth_type=databricks-cli\n", "same"),
+    pat,
+    "method, with the same credential string",
+  );
+});
+
+test("the OAuth M2M identity follows the client_id, not the secret", async () => {
+  const first = await identityOf("[DEFAULT]\nhost=https://p\nclient_id=sp1\nclient_secret=one\n");
+  assert.equal(await identityOf("[DEFAULT]\nhost=https://p\nclient_id=sp1\nclient_secret=two\n"), first);
+  assert.notEqual(await identityOf("[DEFAULT]\nhost=https://p\nclient_id=sp2\nclient_secret=one\n"), first);
+});
+
+test("the OAuth U2M identity follows the profile name", async () => {
+  const config = "[dev]\nhost=https://p\nauth_type=databricks-cli\n[prod]\nhost=https://p\nauth_type=databricks-cli\n";
+  assert.notEqual(await identityOf(config, "dev"), await identityOf(config, "prod"));
+});
+
+test("an environment credential has the same identity as the equivalent profile credential", async () => {
+  const fromEnvironment = await resolveAuth(
+    { ...base, env: { DATABRICKS_HOST: "https://p/", DATABRICKS_TOKEN: "same" } },
+    deps(),
+  );
+  assert.equal(fromEnvironment.cacheIdentity, await identityOf("[DEFAULT]\nhost=https://p\ntoken=same\n"));
+});
