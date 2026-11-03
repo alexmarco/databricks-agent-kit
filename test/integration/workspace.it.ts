@@ -18,6 +18,7 @@ import type { ExportFormat, ExportState } from "../../src/export/types.ts";
 import { openLogRepository } from "../../src/logging/repository.ts";
 import { createLogService } from "../../src/logging/service.ts";
 import { createMetadataService } from "../../src/metadata.ts";
+import { openMetadataCache } from "../../src/metadata-cache.ts";
 import { createWarehouseSelection } from "../../src/warehouses.ts";
 import { selectIntegrationConnection } from "./connection.ts";
 import { createStatementLifecycle, ReadOnlyViolationError, type StatementResult } from "../../src/statements.ts";
@@ -121,6 +122,56 @@ test("lists catalogs and describes the sample table", async () => {
   const description = await metadata.describeTable(table);
   assert.equal(description.fullName, table);
   assert.ok(description.columns.length > 0);
+});
+
+/** Id and state of every SQL warehouse, to prove that describing a table starts none. */
+async function warehouseStates(): Promise<Array<[string, string]>> {
+  const { warehouses = [] } = await client.get<{ warehouses?: Array<{ id: string; state: string }> }>(
+    "/api/2.0/sql/warehouses",
+  );
+  return warehouses.map((warehouse): [string, string] => [warehouse.id, warehouse.state]).sort();
+}
+
+test("describe_table is cached: miss, then hit with no request, refresh reloads, and no warehouse is started", async () => {
+  const tableRequests: string[] = [];
+  const countingClient = {
+    ...client,
+    get: async <T>(path: string, query?: Parameters<typeof client.get>[1]) => {
+      if (path.includes("/tables/")) tableRequests.push(path);
+      return client.get<T>(path, query);
+    },
+  };
+  const noSql = {
+    query: async () => assert.fail("describe_table must not submit a SQL statement"),
+  } as unknown as Parameters<typeof createMetadataService>[1];
+  const cache = await openMetadataCache({
+    path: join(workDir, "cache.db"),
+    identity: auth.cacheIdentity,
+    ttlSeconds: 3600,
+  });
+  try {
+    const cached = createMetadataService(countingClient, noSql, cache);
+    const before = await warehouseStates();
+
+    const first = await cached.describeTable(table);
+    assert.equal(first.cache?.status, "miss");
+    assert.equal(tableRequests.length, 1);
+    const second = await cached.describeTable(table);
+    assert.equal(second.cache?.status, "hit");
+    assert.equal(second.cache?.cachedAt, first.cache?.cachedAt);
+    assert.equal(tableRequests.length, 1, "the hit makes no request");
+    // A hit comes back from JSON, so it lacks the `undefined` keys of a fresh load; the agent sees the same text.
+    assert.equal(JSON.stringify({ ...second, cache: undefined }), JSON.stringify({ ...first, cache: undefined }));
+
+    const refreshed = await cached.describeTable(table, { refresh: true });
+    assert.equal(refreshed.cache?.status, "refreshed");
+    assert.equal(tableRequests.length, 2);
+    assert.equal(cache.entry("table", table)?.hits, 1);
+
+    assert.deepEqual(await warehouseStates(), before, "no warehouse changed state");
+  } finally {
+    cache.close();
+  }
 });
 
 test("searches metadata through information_schema", async () => {

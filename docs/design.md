@@ -1,6 +1,6 @@
 # databricks-agent-kit - Design
 
-Status: approved for implementation (2026-10-18); revised and implemented 2026-10-19 with result export, a minimal tool surface and a logging policy; revised 2026-11-03 with the metadata cache and a REST-only `describe_table` (ADR 0021, being implemented). Decisions: [adr](adr/README.md).
+Status: approved for implementation (2026-10-18); revised and implemented 2026-10-19 with result export, a minimal tool surface and a logging policy; revised 2026-11-03 with the metadata cache and a REST-only `describe_table` (ADR 0021, implemented 2026-11-03). Decisions: [adr](adr/README.md).
 
 ## 1. Goal
 
@@ -144,7 +144,7 @@ For results too large for the agent's context (ADR 0003). `execute_sql` accepts 
 
 ### 4.7 Metadata cache
 
-ADR 0021 (being implemented). The **metadata cache** keeps the answers of `describe_table` and `list_objects` in `cache.db`, so repeated lookups make no request to Databricks. Terms are in GLOSSARY.md.
+ADR 0021. The **metadata cache** keeps the answers of `describe_table` and `list_objects` in `cache.db`, so repeated lookups make no request to Databricks. Terms are in GLOSSARY.md.
 
 - **Entries.** Two kinds: `table`, keyed by the lowercase full name and holding the description, and `listing`, keyed by the lowercase level path (empty for catalogs, `catalog` for schemas, `catalog.schema` for tables) and holding the full listing of that level. `list_objects` applies `pattern` and `limit` to the cached listing.
 - **Freshness.** Fixed TTL, 24 h by default (`DAK_CACHE_TTL`), computed at read time from the load time. A fresh entry is served without a request; an expired one is loaded again and replaced; `refresh: true` forces the reload. Each reload counts whether the value changed. Errors are not cached and a failed reload returns the error, never the stale value. Writes through `execute_sql` invalidate nothing.
@@ -152,7 +152,7 @@ ADR 0021 (being implemented). The **metadata cache** keeps the answers of `descr
 - **Identity.** Each entry belongs to a cache identity: a local SHA-256 of host, authentication method and the credential that identifies the principal (PAT token, M2M `client_id`, U2M profile name), provided by the resolved credentials of the workspace session. HTTP clients share the server's single identity, and so its entries.
 - **Storage.** `<DAK_STORAGE_DIR>/cache.db`, `node:sqlite`, WAL, `synchronous=NORMAL`, `busy_timeout=5000`, owner-only outside Windows. One `WITHOUT ROWID` table keyed by (identity, kind, key) with the JSON value, the first and last load times, the last use, the duration of the last load and the counters (hits, misses, expirations, refreshes, reloads with and without changes), and an index on the last use. `PRAGMA user_version` versions the schema; a file with another version, or one that cannot be opened, is recreated. Entries unused for 30 days are purged at startup and every 24 h on an unreferenced timer.
 - **Failures.** The cache never fails a tool call: on a read or write error the call goes to Databricks, answers with `bypassed` and logs a `warn`.
-- **Statistics.** `resource://cache/stats` sums the live entries of the current identity by kind: entries, hits, misses, expirations, refreshes, reloads with and without changes, hit ratio, estimated time saved (hits times the last load duration) and the first load of the oldest entry. `resource://cache/entry/...` gives one entry with its counters, `cachedAt`, `expiresAt`, `lastUsedAt` and last load duration. `bypassed` answers are counted only in the log.
+- **Statistics.** `resource://cache/stats` sums the live entries of the current identity by kind: entries, hits, misses, expirations, refreshes, reloads with and without changes, hit ratio (`hits / (hits + misses + expirations)`), estimated time saved (hits times the last load duration) and the first load of the oldest entry. `resource://cache/entry/table/{full_name}` and `resource://cache/entry/listing/{path}` (the empty path, `resource://cache/entry/listing/`, is the catalogs) give one entry with its counters, `cachedAt`, `expiresAt`, `lastUsedAt` and last load duration. `bypassed` answers are counted only in the log.
 - **Doctor.** `dak doctor` checks that `cache.db` opens and is writable, its schema version and the effective TTL, and reports a disabled cache.
 
 ## 5. Configuration
@@ -285,12 +285,12 @@ The README is a summary of the documentation site in `docs/`, which takes preced
 
 ## 9. Verification strategy
 
-| Level       | What                                                                                                                                                                                                                        | How                                                                     |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Unit        | Read-only check, config/profile parsing, auth selection, result shaping, error mapping, UUID v7, queue/flush, repository, purge, SQLite type mapping, ordered CSV concatenation, atomic rename, name sanitizing, log levels | `node --test`, written test-first; `fetch` stubbed at the HTTP boundary |
-| End to end  | MCP client spawns `dak mcp` over stdio and connects over HTTP against a local stub of the Databricks REST API and a presigned-URL origin: list tools/resources, `execute_sql`, exports, cancellation, an error path         | MCP client SDK in `node:test`                                           |
-| Integration | Real workspace: auth, warehouse selection, SQL, metadata, multi-chunk CSV, Arrow to Parquet with `NULL`, `DATE`, `BINARY` and `MAP`, `byte_count` against the downloaded size                                               | Gated by `DAK_IT_PROFILE`; skipped otherwise                            |
-| Agent       | Claude Code / OpenCode answer a data question using MCP tool calls                                                                                                                                                          | Manual run, documented in the README                                    |
+| Level       | What                                                                                                                                                                                                                                   | How                                                                     |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Unit        | Read-only check, config/profile parsing, auth selection, result shaping, error mapping, UUID v7, queue/flush, repository, purge, SQLite type mapping, ordered CSV concatenation, atomic rename, name sanitizing, log levels            | `node --test`, written test-first; `fetch` stubbed at the HTTP boundary |
+| End to end  | MCP client spawns `dak mcp` over stdio and connects over HTTP against a local stub of the Databricks REST API and a presigned-URL origin: list tools/resources, `execute_sql`, exports, cancellation, an error path                    | MCP client SDK in `node:test`                                           |
+| Integration | Real workspace: auth, warehouse selection, SQL, metadata and its cache (miss, hit, refresh, no warehouse started), multi-chunk CSV, Arrow to Parquet with `NULL`, `DATE`, `BINARY` and `MAP`, `byte_count` against the downloaded size | Gated by `DAK_IT_PROFILE`; skipped otherwise                            |
+| Agent       | Claude Code / OpenCode answer a data question using MCP tool calls                                                                                                                                                                     | Manual run, documented in the README                                    |
 
 ## 10. Delivery pipeline
 
