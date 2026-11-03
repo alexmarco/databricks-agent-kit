@@ -46,6 +46,8 @@ export interface WorkspaceConnection {
 /** Everything the server needs from Databricks. */
 export interface Workspace extends WorkspaceConnection {
   metadata: MetadataService;
+  /** The metadata cache of the session's identity; undefined when it is disabled. */
+  cache: MetadataCache | undefined;
   exports: ExportManager;
 }
 
@@ -143,6 +145,7 @@ export function createWorkspaceSession(
     return {
       ...connection,
       metadata: createMetadataService(connection.client, connection.statements, cache),
+      cache,
       exports,
     };
   };

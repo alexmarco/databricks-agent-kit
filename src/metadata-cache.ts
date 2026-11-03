@@ -19,13 +19,42 @@ export interface CacheInfo {
 
 /** Counters and dates of one entry. */
 export interface CacheEntryInfo {
+  /** When the answer was loaded from Databricks. */
   cachedAt: string;
+  /** When the entry stops being fresh. */
+  expiresAt: string;
+  lastUsedAt: string;
+  /** How long the last load from Databricks took. */
+  lastLoadMs: number;
   hits: number;
   misses: number;
   expirations: number;
   refreshes: number;
   reloadsChanged: number;
   reloadsUnchanged: number;
+}
+
+/** Figures of the entries of one kind, or of all of them. */
+export interface CacheCounters {
+  entries: number;
+  hits: number;
+  misses: number;
+  expirations: number;
+  refreshes: number;
+  reloadsChanged: number;
+  reloadsUnchanged: number;
+  /** `hits / (hits + misses + expirations)`: the lookups a fresh entry could have served; null before any. */
+  hitRatio: number | null;
+  /** Each entry's hits times the duration of its last load. */
+  timeSavedMs: number;
+  /** When the oldest entry was first loaded; null without entries. */
+  oldestLoadedAt: string | null;
+}
+
+/** Statistics of the live entries of one cache identity. */
+export interface CacheStats {
+  total: CacheCounters;
+  byKind: Record<CacheKind, CacheCounters>;
 }
 
 export interface MetadataCacheOptions {
@@ -57,6 +86,8 @@ export interface MetadataCache {
   ): Promise<{ value: T; cache: CacheInfo }>;
   /** Counters and dates of one entry of this identity, or undefined when it is not cached. */
   entry(kind: CacheKind, key: string): CacheEntryInfo | undefined;
+  /** Totals over the live entries of this identity, overall and by kind. Reading them changes no counter. */
+  stats(): CacheStats;
   close(): void;
 }
 
@@ -86,6 +117,25 @@ PRAGMA user_version = ${SCHEMA_VERSION};
 type Row = Record<string, unknown>;
 
 const FILE_SUFFIXES = ["", "-wal", "-shm"];
+
+const emptyCounters = (): CacheCounters => ({
+  entries: 0,
+  hits: 0,
+  misses: 0,
+  expirations: 0,
+  refreshes: 0,
+  reloadsChanged: 0,
+  reloadsUnchanged: 0,
+  hitRatio: null,
+  timeSavedMs: 0,
+  oldestLoadedAt: null,
+});
+
+/** Fills the hit ratio of `counters` from their hits, misses and expirations. */
+function withHitRatio(counters: CacheCounters): CacheCounters {
+  const lookups = counters.hits + counters.misses + counters.expirations;
+  return { ...counters, hitRatio: lookups === 0 ? null : counters.hits / lookups };
+}
 
 /** Opens the database at `path` with the current schema; throws when the file is not a usable cache of this version. */
 async function openDatabase(path: string) {
@@ -135,6 +185,7 @@ export async function openMetadataCache(options: MetadataCacheOptions): Promise<
     return {
       lookup: async (_kind, _key, load) => bypassed(await load()),
       entry: () => undefined,
+      stats: () => ({ total: emptyCounters(), byKind: { table: emptyCounters(), listing: emptyCounters() } }),
       close: () => undefined,
     };
   }
@@ -160,6 +211,13 @@ export async function openMetadataCache(options: MetadataCacheOptions): Promise<
   );
 
   let closed = false;
+
+  const selectTotals = db.prepare(
+    `SELECT kind, COUNT(*) AS entries, SUM(hits) AS hits, SUM(misses) AS misses, SUM(expirations) AS expirations,
+       SUM(refreshes) AS refreshes, SUM(reloads_changed) AS reloads_changed, SUM(reloads_unchanged) AS reloads_unchanged,
+       SUM(hits * last_load_ms) AS time_saved_ms, MIN(first_loaded_at) AS oldest
+     FROM cache_entries WHERE identity = ? GROUP BY kind`,
+  );
 
   return {
     async lookup<T>(
@@ -216,12 +274,52 @@ export async function openMetadataCache(options: MetadataCacheOptions): Promise<
       if (row === undefined) return undefined;
       return {
         cachedAt: isoTime(row.loaded_at),
+        expiresAt: isoTime(Number(row.loaded_at) + ttlMs),
+        lastUsedAt: isoTime(row.last_used_at),
+        lastLoadMs: Number(row.last_load_ms),
         hits: Number(row.hits),
         misses: Number(row.misses),
         expirations: Number(row.expirations),
         refreshes: Number(row.refreshes),
         reloadsChanged: Number(row.reloads_changed),
         reloadsUnchanged: Number(row.reloads_unchanged),
+      };
+    },
+    stats() {
+      const byKind: Record<CacheKind, CacheCounters> = { table: emptyCounters(), listing: emptyCounters() };
+      const total = emptyCounters();
+      let oldest = Number.POSITIVE_INFINITY;
+      for (const row of selectTotals.all(identity) as Row[]) {
+        const kind = row.kind as CacheKind;
+        const counters = {
+          entries: Number(row.entries),
+          hits: Number(row.hits),
+          misses: Number(row.misses),
+          expirations: Number(row.expirations),
+          refreshes: Number(row.refreshes),
+          reloadsChanged: Number(row.reloads_changed),
+          reloadsUnchanged: Number(row.reloads_unchanged),
+          timeSavedMs: Number(row.time_saved_ms),
+          oldestLoadedAt: isoTime(row.oldest),
+        };
+        byKind[kind] = withHitRatio({ ...counters, hitRatio: null });
+        for (const field of [
+          "entries",
+          "hits",
+          "misses",
+          "expirations",
+          "refreshes",
+          "reloadsChanged",
+          "reloadsUnchanged",
+          "timeSavedMs",
+        ] as const) {
+          total[field] += counters[field];
+        }
+        oldest = Math.min(oldest, Number(row.oldest));
+      }
+      return {
+        total: withHitRatio({ ...total, oldestLoadedAt: Number.isFinite(oldest) ? isoTime(oldest) : null }),
+        byKind,
       };
     },
     close: () => {

@@ -701,3 +701,168 @@ test("listObjects still rejects a schema without a catalog when a cache is in us
     await assert.rejects(metadata.listObjects({ schema: "s" }), InvalidArgumentError);
   });
 });
+
+/** A client whose requests take a known time on the injected clock: 40 ms for a table, 100 ms for the catalogs. */
+function timedClient(clock: { now: number }, routes: Record<string, unknown>): DatabricksClient {
+  return {
+    host: "https://ws",
+    get: async <T>(path: string) => {
+      clock.now += path.endsWith("/catalogs") ? 100 : 40;
+      return routes[path] as T;
+    },
+    post: async <T>() => ({}) as T,
+  };
+}
+
+/** table: miss, hit x3, refresh. listing (catalogs): miss, hit x3. One minute passes between calls. */
+async function runKnownSequence(metadata: ReturnType<typeof createMetadataService>, clock: { now: number }) {
+  const step = () => (clock.now += MINUTE);
+  await metadata.describeTable("main.s.t");
+  for (let call = 0; call < 3; call++) {
+    step();
+    await metadata.describeTable("main.s.t");
+  }
+  step();
+  await metadata.describeTable("main.s.t", { refresh: true });
+  step();
+  await metadata.listObjects({});
+  for (let call = 0; call < 3; call++) {
+    step();
+    await metadata.listObjects({});
+  }
+}
+
+test("the cache statistics match a known sequence of calls", async () => {
+  await withCache(async ({ open, clock }) => {
+    const cache = await open();
+    const client = timedClient(clock, { ...listingRoutes(), ...cachedTableRoute() });
+    await runKnownSequence(createMetadataService(client, noStatements, cache), clock);
+    assert.deepEqual(cache.stats(), {
+      total: {
+        entries: 2,
+        hits: 6,
+        misses: 2,
+        expirations: 0,
+        refreshes: 1,
+        reloadsChanged: 0,
+        reloadsUnchanged: 1,
+        hitRatio: 0.75,
+        timeSavedMs: 420,
+        oldestLoadedAt: "2026-11-03T10:00:00.040Z",
+      },
+      byKind: {
+        table: {
+          entries: 1,
+          hits: 3,
+          misses: 1,
+          expirations: 0,
+          refreshes: 1,
+          reloadsChanged: 0,
+          reloadsUnchanged: 1,
+          hitRatio: 0.75,
+          timeSavedMs: 120,
+          oldestLoadedAt: "2026-11-03T10:00:00.040Z",
+        },
+        listing: {
+          entries: 1,
+          hits: 3,
+          misses: 1,
+          expirations: 0,
+          refreshes: 0,
+          reloadsChanged: 0,
+          reloadsUnchanged: 0,
+          hitRatio: 0.75,
+          timeSavedMs: 300,
+          oldestLoadedAt: "2026-11-03T10:05:00.180Z",
+        },
+      },
+    });
+  });
+});
+
+test("the cache statistics of an empty cache are zero with no ratio and no date", async () => {
+  await withCache(async ({ open }) => {
+    const empty = {
+      entries: 0,
+      hits: 0,
+      misses: 0,
+      expirations: 0,
+      refreshes: 0,
+      reloadsChanged: 0,
+      reloadsUnchanged: 0,
+      hitRatio: null,
+      timeSavedMs: 0,
+      oldestLoadedAt: null,
+    };
+    assert.deepEqual((await open()).stats(), { total: empty, byKind: { table: empty, listing: empty } });
+  });
+});
+
+test("an entry reports its counters, times and last load duration", async () => {
+  await withCache(async ({ open, clock }) => {
+    const cache = await open({ ttlSeconds: 600 });
+    await runKnownSequence(
+      createMetadataService(timedClient(clock, { ...listingRoutes(), ...cachedTableRoute() }), noStatements, cache),
+      clock,
+    );
+    assert.deepEqual(cache.entry("table", "MAIN.S.T"), {
+      cachedAt: "2026-11-03T10:04:00.080Z",
+      expiresAt: "2026-11-03T10:14:00.080Z",
+      lastUsedAt: "2026-11-03T10:04:00.080Z",
+      lastLoadMs: 40,
+      hits: 3,
+      misses: 1,
+      expirations: 0,
+      refreshes: 1,
+      reloadsChanged: 0,
+      reloadsUnchanged: 1,
+    });
+    assert.equal(cache.entry("listing", "")?.hits, 3, "the catalogs listing has the empty key");
+    assert.equal(cache.entry("table", "main.s.missing"), undefined);
+  });
+});
+
+test("reading the statistics does not change the counters", async () => {
+  await withCache(async ({ open, clock }) => {
+    const cache = await open();
+    await runKnownSequence(
+      createMetadataService(timedClient(clock, { ...listingRoutes(), ...cachedTableRoute() }), noStatements, cache),
+      clock,
+    );
+    const before = { stats: cache.stats(), entry: cache.entry("table", "main.s.t") };
+    cache.stats();
+    cache.entry("table", "main.s.t");
+    assert.deepEqual({ stats: cache.stats(), entry: cache.entry("table", "main.s.t") }, before);
+  });
+});
+
+test("statistics and entries are limited to the cache identity", async () => {
+  await withCache(async ({ open, clock }) => {
+    const mine = await open({ identity: "identity-a" });
+    const other = await open({ identity: "identity-b" });
+    await runKnownSequence(
+      createMetadataService(timedClient(clock, { ...listingRoutes(), ...cachedTableRoute() }), noStatements, mine),
+      clock,
+    );
+    assert.equal(other.stats().total.entries, 0);
+    assert.equal(other.stats().total.hits, 0);
+    assert.equal(other.entry("table", "main.s.t"), undefined);
+    assert.equal(mine.stats().total.entries, 2);
+  });
+});
+
+test("bypassed answers are not counted in the statistics", async () => {
+  await withCache(async ({ open, path, clock }) => {
+    const cache = await open({ ttlSeconds: 600 });
+    const metadata = createMetadataService(fakeClient(cachedTableRoute()).client, noStatements, cache);
+    await metadata.describeTable("main.s.t");
+    const Database = await loadDatabaseSync();
+    const other = new Database(path);
+    other.exec("CREATE TRIGGER no_update BEFORE UPDATE ON cache_entries BEGIN SELECT RAISE(ABORT, 'read-only'); END;");
+    other.close();
+    clock.now += 11 * MINUTE;
+    assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "bypassed");
+    const { total } = cache.stats();
+    assert.deepEqual([total.misses, total.expirations, total.hits, total.refreshes], [1, 0, 0, 0]);
+  });
+});

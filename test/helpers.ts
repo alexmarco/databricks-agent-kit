@@ -5,6 +5,7 @@ import { createExecutionScope } from "../src/execution-scope.ts";
 import type { ExportManager } from "../src/export/manager.ts";
 import type { ExportFormat, ExportState } from "../src/export/types.ts";
 import type { MetadataService } from "../src/metadata.ts";
+import type { MetadataCache } from "../src/metadata-cache.ts";
 import type { WarehouseSelection } from "../src/warehouses.ts";
 import type { ExecuteSqlRequest, StatementLifecycle, StatementResult } from "../src/statements.ts";
 import { SqlError } from "../src/statements.ts";
@@ -23,7 +24,13 @@ export const okResult: StatementResult = {
 };
 
 /** Fake services, handed to the server through `workspace`; `scope` is the execution scope of `logs`, which the fakes use to report diagnostics like the real modules. */
-export function fakeServices(logs: LogService) {
+export const FAKE_CACHE_STATS = {
+  total: { entries: 2, hits: 4, misses: 2, hitRatio: 0.6667 },
+  byKind: { table: { entries: 1, hits: 3 }, listing: { entries: 1, hits: 1 } },
+};
+const FAKE_CACHE_ENTRY = { cachedAt: "2026-11-03T10:00:00.000Z", hits: 3, lastLoadMs: 40 };
+
+export function fakeServices(logs: LogService, options: { cache?: boolean } = {}) {
   const scope = createExecutionScope(logs);
   const sqlRequests: ExecuteSqlRequest[] = [];
   const getStatementCalls: Array<{ statementId: string; options: unknown }> = [];
@@ -107,13 +114,25 @@ export function fakeServices(logs: LogService) {
     cleanup: async () => undefined,
     close: async () => undefined,
   };
-  const workspace = async () => ({ warehouses, statements, metadata, exports });
+  /** Knows the entries `table/main.s.t`, `listing/main.default` and the catalogs listing (empty key). */
+  const cache = (options.cache === false
+    ? undefined
+    : {
+        stats: () => FAKE_CACHE_STATS,
+        entry: (kind: string, key: string) =>
+          (kind === "table" && key.toLowerCase() === "main.s.t") ||
+          (kind === "listing" && ["main.default", ""].includes(key.toLowerCase()))
+            ? FAKE_CACHE_ENTRY
+            : undefined,
+      }) as unknown as MetadataCache | undefined;
+  const workspace = async () => ({ warehouses, statements, metadata, exports, cache });
   return {
     workspace,
     warehouses,
     statements,
     metadata,
     exports,
+    cache,
     scope,
     exportStates,
     sqlRequests,

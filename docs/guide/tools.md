@@ -90,6 +90,30 @@ Catalog comments and keys, the better the agent's SQL.
 - **`get_statement`** follows any statement that is still running. A statement that runs longer than 30 seconds returns
   its `statement_id` so you can wait for it.
 
+## Cache statistics
+
+Two kinds of resource, not tools, show how well the metadata cache works. They cover only the entries of the credentials
+the server uses, never those of another identity, and reading them changes no counter.
+
+| Resource                                                                      | Content                                                                                                         |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `resource://cache/stats`                                                      | The totals and the figures of each kind (`table`, `listing`)                                                    |
+| `resource://cache/entry/table/{full_name}`                                    | One cached table description                                                                                    |
+| `resource://cache/entry/listing/{path}` and `resource://cache/entry/listing/` | One cached listing: `catalog` (its schemas), `catalog.schema` (its tables), and the empty path for the catalogs |
+
+The statistics give `entries`, `hits`, `misses`, `expirations`, `refreshes`, `reloadsChanged` and `reloadsUnchanged`
+(how many reloads found a different answer and how many the same), `hitRatio`, `timeSavedMs` and `oldestLoadedAt`.
+
+- `hitRatio` is `hits / (hits + misses + expirations)`: the lookups a fresh entry could have served. A `refresh` is a
+  forced reload and does not count in it. It is `null` before any lookup. A ratio that stays low while `reloadsUnchanged`
+  is high means the TTL is shorter than it needs to be.
+- `timeSavedMs` is the sum, over the entries, of their hits times the duration of their last load from Databricks. It is
+  an estimate.
+- `bypassed` answers, where the cache itself failed, are not counted. They are in the log.
+- An entry also gives `cachedAt`, `expiresAt`, `lastUsedAt` and `lastLoadMs`. Names are not case-sensitive. An entry that is
+  not cached, because it was never looked up with this identity or was purged, answers `NOT_FOUND`.
+- With `DAK_CACHE_TTL=0` every one of these resources answers `{ "enabled": false }` with an explanation.
+
 ## Results and limits
 
 - Results hold 100 rows by default. `row_limit` sets the number of rows, up to `DAK_MAX_ROWS` (default 1000).

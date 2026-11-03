@@ -694,3 +694,63 @@ test("stdio: list_objects is cached whatever the pattern and limit, and refresh 
     await rm(storageDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 });
+
+test("stdio: the cache resources report a known sequence of calls and reading them changes nothing", {
+  timeout: 60_000,
+}, async () => {
+  const stub = await startDatabricksStub();
+  const storageDir = await mkdtemp(join(tmpdir(), "dak-e2e-"));
+  try {
+    await withDakChild(stub, storageDir, {}, async (client) => {
+      const table = { full_name: "main.sales.orders" };
+      await callJson(client, "describe_table", table); // miss
+      await callJson(client, "describe_table", table); // hit
+      await callJson(client, "describe_table", table); // hit
+      await callJson(client, "list_objects", {}); // miss
+      await callJson(client, "list_objects", { pattern: "sam" }); // hit
+
+      const stats = await readResourceJson(client, "resource://cache/stats");
+      assert.equal(stats.enabled, true);
+      assert.deepEqual(
+        [stats.total.entries, stats.total.hits, stats.total.misses, stats.total.hitRatio],
+        [2, 3, 2, 0.6],
+      );
+      assert.deepEqual(
+        [stats.byKind.table.hits, stats.byKind.table.misses, stats.byKind.listing.hits, stats.byKind.listing.misses],
+        [2, 1, 1, 1],
+      );
+      assert.equal(typeof stats.total.timeSavedMs, "number");
+      assert.deepEqual(await readResourceJson(client, "resource://cache/stats"), stats, "reading changes no counter");
+
+      const entry = await readResourceJson(client, "resource://cache/entry/table/MAIN.sales.orders");
+      assert.equal(entry.hits, 2);
+      assert.equal(entry.misses, 1);
+      for (const field of ["cachedAt", "expiresAt", "lastUsedAt"]) assert.match(entry[field], /^\d{4}-\d\d-\d\dT/);
+      assert.equal(typeof entry.lastLoadMs, "number");
+      assert.equal((await readResourceJson(client, "resource://cache/entry/listing/")).hits, 1);
+      await assert.rejects(
+        client.readResource({ uri: "resource://cache/entry/table/main.sales.never" }),
+        /No cache entry for table 'main.sales.never'/,
+      );
+    });
+  } finally {
+    await stub.close();
+    await rm(storageDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
+test("stdio: with DAK_CACHE_TTL=0 the cache resources say the cache is disabled", { timeout: 60_000 }, async () => {
+  const stub = await startDatabricksStub();
+  const storageDir = await mkdtemp(join(tmpdir(), "dak-e2e-"));
+  try {
+    await withDakChild(stub, storageDir, { DAK_CACHE_TTL: "0" }, async (client) => {
+      for (const uri of ["resource://cache/stats", "resource://cache/entry/table/main.sales.orders"]) {
+        const payload = await readResourceJson(client, uri);
+        assert.equal(payload.enabled, false, uri);
+      }
+    });
+  } finally {
+    await stub.close();
+    await rm(storageDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});

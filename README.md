@@ -248,6 +248,12 @@ Details that the table leaves out:
 
 Resource `resource://databricks/warehouses` lists the SQL warehouses visible to the identity and marks the default one.
 
+Resources `resource://cache/stats` and `resource://cache/entry/table/{full_name}` or `resource://cache/entry/listing/{path}`
+(the empty path, `resource://cache/entry/listing/`, is the catalogs) show how well the metadata cache works for the
+identity of the server: entries, hits, misses, expirations, refreshes, reloads with and without changes, `hitRatio`
+(`hits / (hits + misses + expirations)`) and `timeSavedMs` (each entry's hits times the duration of its last load). A
+missing entry answers `NOT_FOUND`, and with `DAK_CACHE_TTL=0` they report `enabled: false`. Reading them changes no counter.
+
 Suggested workflow for data questions (it replaces Genie): `search_metadata` or `list_objects` -> `describe_table` ->
 `execute_sql` (a `SELECT ... LIMIT` gives a quick look at the data). Aggregate in SQL when the result is large, or pass
 `export` to write the full result to a file. The better your Unity Catalog comments and keys, the better the agent's SQL.
