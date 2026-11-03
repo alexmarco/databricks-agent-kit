@@ -2,7 +2,7 @@
   "title": "stdio starts one dak process per agent session; Streamable HTTP shares one dak server",
   "type": "excalidraw",
   "version": 2,
-  "source": "https://excalidraw.com",
+  "source": "https://marketplace.visualstudio.com/items?itemName=pomdtr.excalidraw-editor",
   "elements": [
     {
       "id": "stdio-panel",
@@ -22,16 +22,18 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 2101,
-      "version": 1,
-      "versionNonce": 14714,
+      "version": 2,
+      "versionNonce": 1149991170,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "a0"
     },
     {
       "id": "stdio-panel-title",
@@ -52,15 +54,15 @@
       "frameId": null,
       "roundness": null,
       "seed": 2102,
-      "version": 1,
-      "versionNonce": 14721,
+      "version": 11,
+      "versionNonce": 1379444802,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683559609,
       "link": null,
       "locked": false,
-      "text": "stdio: one process per session",
-      "originalText": "stdio: one process per session",
+      "text": "one process per session",
+      "originalText": "one process per session",
       "fontSize": 20,
       "fontFamily": 5,
       "textAlign": "left",
@@ -68,7 +70,8 @@
       "containerId": null,
       "lineHeight": 1.25,
       "autoResize": false,
-      "baseline": 18
+      "baseline": 18,
+      "index": "a1"
     },
     {
       "id": "stdio-session-1",
@@ -88,11 +91,12 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 2103,
-      "version": 1,
-      "versionNonce": 14728,
+      "version": 2,
+      "versionNonce": 209258690,
       "isDeleted": false,
       "boundElements": [
         {
@@ -100,9 +104,10 @@
           "type": "text"
         }
       ],
-      "updated": 1,
+      "updated": 1793683438654,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "a2"
     },
     {
       "id": "stdio-session-1-text",
@@ -123,11 +128,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 2104,
-      "version": 1,
-      "versionNonce": 14735,
+      "version": 2,
+      "versionNonce": 1510628446,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
       "locked": false,
       "text": "Agent session 1",
@@ -139,7 +144,8 @@
       "containerId": "stdio-session-1",
       "lineHeight": 1.25,
       "autoResize": false,
-      "baseline": 18
+      "baseline": 18,
+      "index": "a3"
     },
     {
       "id": "stdio-session-2",
@@ -159,11 +165,12 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 2105,
-      "version": 1,
-      "versionNonce": 14742,
+      "version": 2,
+      "versionNonce": 1738449026,
       "isDeleted": false,
       "boundElements": [
         {
@@ -171,9 +178,10 @@
           "type": "text"
         }
       ],
-      "updated": 1,
+      "updated": 1793683438654,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "a4"
     },
     {
       "id": "stdio-session-2-text",
@@ -194,11 +202,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 2106,
-      "version": 1,
-      "versionNonce": 14749,
+      "version": 2,
+      "versionNonce": 1601904798,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
       "locked": false,
       "text": "Agent session 2",
@@ -210,7 +218,8 @@
       "containerId": "stdio-session-2",
       "lineHeight": 1.25,
       "autoResize": false,
-      "baseline": 18
+      "baseline": 18,
+      "index": "a5"
     },
     {
       "id": "stdio-databricks",
@@ -230,11 +239,12 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 2107,
-      "version": 1,
-      "versionNonce": 14756,
+      "version": 2,
+      "versionNonce": 1102790722,
       "isDeleted": false,
       "boundElements": [
         {
@@ -242,9 +252,10 @@
           "type": "text"
         }
       ],
-      "updated": 1,
+      "updated": 1793683438654,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "a6"
     },
     {
       "id": "stdio-databricks-text",
@@ -265,11 +276,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 2108,
-      "version": 1,
-      "versionNonce": 14763,
+      "version": 2,
+      "versionNonce": 986275038,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
       "locked": false,
       "text": "Databricks",
@@ -281,7 +292,8 @@
       "containerId": "stdio-databricks",
       "lineHeight": 1.25,
       "autoResize": false,
-      "baseline": 18
+      "baseline": 18,
+      "index": "a7"
     },
     {
       "id": "stdio-process-1",
@@ -301,11 +313,12 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 2109,
-      "version": 1,
-      "versionNonce": 14770,
+      "version": 2,
+      "versionNonce": 917366786,
       "isDeleted": false,
       "boundElements": [
         {
@@ -313,9 +326,10 @@
           "type": "text"
         }
       ],
-      "updated": 1,
+      "updated": 1793683438654,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "a8"
     },
     {
       "id": "stdio-process-1-text",
@@ -336,11 +350,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 2110,
-      "version": 1,
-      "versionNonce": 14777,
+      "version": 2,
+      "versionNonce": 1099305246,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
       "locked": false,
       "text": "dak process",
@@ -352,7 +366,8 @@
       "containerId": "stdio-process-1",
       "lineHeight": 1.25,
       "autoResize": false,
-      "baseline": 18
+      "baseline": 18,
+      "index": "a9"
     },
     {
       "id": "stdio-process-2",
@@ -372,11 +387,12 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 2111,
-      "version": 1,
-      "versionNonce": 14784,
+      "version": 2,
+      "versionNonce": 242587586,
       "isDeleted": false,
       "boundElements": [
         {
@@ -384,9 +400,10 @@
           "type": "text"
         }
       ],
-      "updated": 1,
+      "updated": 1793683438654,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aA"
     },
     {
       "id": "stdio-process-2-text",
@@ -407,11 +424,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 2112,
-      "version": 1,
-      "versionNonce": 14791,
+      "version": 2,
+      "versionNonce": 1864514910,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
       "locked": false,
       "text": "dak process",
@@ -423,7 +440,8 @@
       "containerId": "stdio-process-2",
       "lineHeight": 1.25,
       "autoResize": false,
-      "baseline": 18
+      "baseline": 18,
+      "index": "aB"
     },
     {
       "id": "stdio-session-1-to-process",
@@ -444,11 +462,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 2113,
-      "version": 1,
-      "versionNonce": 14798,
+      "version": 2,
+      "versionNonce": 959532930,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
       "locked": false,
       "points": [
@@ -466,7 +484,8 @@
       "endBinding": null,
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "aC"
     },
     {
       "id": "stdio-session-2-to-process",
@@ -487,11 +506,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 2114,
-      "version": 1,
-      "versionNonce": 14805,
+      "version": 2,
+      "versionNonce": 686743966,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
       "locked": false,
       "points": [
@@ -509,7 +528,8 @@
       "endBinding": null,
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "aD"
     },
     {
       "id": "stdio-process-1-to-databricks",
@@ -530,11 +550,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 2115,
-      "version": 1,
-      "versionNonce": 14812,
+      "version": 2,
+      "versionNonce": 1260392258,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
       "locked": false,
       "points": [
@@ -552,7 +572,8 @@
       "endBinding": null,
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "aE"
     },
     {
       "id": "stdio-process-2-to-databricks",
@@ -573,11 +594,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 2116,
-      "version": 1,
-      "versionNonce": 14819,
+      "version": 2,
+      "versionNonce": 35454430,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
       "locked": false,
       "points": [
@@ -595,7 +616,8 @@
       "endBinding": null,
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "aF"
     },
     {
       "id": "http-panel",
@@ -615,16 +637,18 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 2117,
-      "version": 1,
-      "versionNonce": 14826,
+      "version": 2,
+      "versionNonce": 2023806722,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aG"
     },
     {
       "id": "http-panel-title",
@@ -645,15 +669,15 @@
       "frameId": null,
       "roundness": null,
       "seed": 2118,
-      "version": 1,
-      "versionNonce": 14833,
+      "version": 3,
+      "versionNonce": 804065154,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683605513,
       "link": null,
       "locked": false,
-      "text": "Streamable HTTP: one shared server",
-      "originalText": "Streamable HTTP: one shared server",
+      "text": "one shared server",
+      "originalText": "one shared server",
       "fontSize": 20,
       "fontFamily": 5,
       "textAlign": "left",
@@ -661,7 +685,8 @@
       "containerId": null,
       "lineHeight": 1.25,
       "autoResize": false,
-      "baseline": 18
+      "baseline": 18,
+      "index": "aH"
     },
     {
       "id": "http-session-1",
@@ -681,11 +706,12 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 2119,
-      "version": 1,
-      "versionNonce": 14840,
+      "version": 2,
+      "versionNonce": 305309378,
       "isDeleted": false,
       "boundElements": [
         {
@@ -693,9 +719,10 @@
           "type": "text"
         }
       ],
-      "updated": 1,
+      "updated": 1793683438654,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aI"
     },
     {
       "id": "http-session-1-text",
@@ -716,11 +743,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 2120,
-      "version": 1,
-      "versionNonce": 14847,
+      "version": 2,
+      "versionNonce": 1556192862,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
       "locked": false,
       "text": "Agent session 1",
@@ -732,7 +759,8 @@
       "containerId": "http-session-1",
       "lineHeight": 1.25,
       "autoResize": false,
-      "baseline": 18
+      "baseline": 18,
+      "index": "aJ"
     },
     {
       "id": "http-session-2",
@@ -752,11 +780,12 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 2121,
-      "version": 1,
-      "versionNonce": 14854,
+      "version": 2,
+      "versionNonce": 7634562,
       "isDeleted": false,
       "boundElements": [
         {
@@ -764,9 +793,10 @@
           "type": "text"
         }
       ],
-      "updated": 1,
+      "updated": 1793683438654,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aK"
     },
     {
       "id": "http-session-2-text",
@@ -787,11 +817,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 2122,
-      "version": 1,
-      "versionNonce": 14861,
+      "version": 2,
+      "versionNonce": 1308238494,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
       "locked": false,
       "text": "Agent session 2",
@@ -803,7 +833,8 @@
       "containerId": "http-session-2",
       "lineHeight": 1.25,
       "autoResize": false,
-      "baseline": 18
+      "baseline": 18,
+      "index": "aL"
     },
     {
       "id": "http-databricks",
@@ -823,11 +854,12 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 2123,
-      "version": 1,
-      "versionNonce": 14868,
+      "version": 2,
+      "versionNonce": 1076190786,
       "isDeleted": false,
       "boundElements": [
         {
@@ -835,9 +867,10 @@
           "type": "text"
         }
       ],
-      "updated": 1,
+      "updated": 1793683438654,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aM"
     },
     {
       "id": "http-databricks-text",
@@ -858,11 +891,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 2124,
-      "version": 1,
-      "versionNonce": 14875,
+      "version": 2,
+      "versionNonce": 1175985886,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
       "locked": false,
       "text": "Databricks",
@@ -874,7 +907,8 @@
       "containerId": "http-databricks",
       "lineHeight": 1.25,
       "autoResize": false,
-      "baseline": 18
+      "baseline": 18,
+      "index": "aN"
     },
     {
       "id": "http-server",
@@ -894,11 +928,12 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 2125,
-      "version": 1,
-      "versionNonce": 14882,
+      "version": 2,
+      "versionNonce": 1579435522,
       "isDeleted": false,
       "boundElements": [
         {
@@ -906,9 +941,10 @@
           "type": "text"
         }
       ],
-      "updated": 1,
+      "updated": 1793683438654,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aO"
     },
     {
       "id": "http-server-text",
@@ -929,11 +965,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 2126,
-      "version": 1,
-      "versionNonce": 14889,
+      "version": 2,
+      "versionNonce": 967611166,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
       "locked": false,
       "text": "dak server",
@@ -945,7 +981,8 @@
       "containerId": "http-server",
       "lineHeight": 1.25,
       "autoResize": false,
-      "baseline": 18
+      "baseline": 18,
+      "index": "aP"
     },
     {
       "id": "http-session-1-to-server",
@@ -966,11 +1003,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 2127,
-      "version": 1,
-      "versionNonce": 14896,
+      "version": 2,
+      "versionNonce": 1936733634,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
       "locked": false,
       "points": [
@@ -988,7 +1025,8 @@
       "endBinding": null,
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "aQ"
     },
     {
       "id": "http-session-2-to-server",
@@ -1009,11 +1047,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 2128,
-      "version": 1,
-      "versionNonce": 14903,
+      "version": 2,
+      "versionNonce": 1663598430,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
       "locked": false,
       "points": [
@@ -1031,7 +1069,8 @@
       "endBinding": null,
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "aR"
     },
     {
       "id": "http-server-to-databricks",
@@ -1052,11 +1091,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 2129,
-      "version": 1,
-      "versionNonce": 14910,
+      "version": 2,
+      "versionNonce": 556281218,
       "isDeleted": false,
-      "boundElements": null,
-      "updated": 1,
+      "boundElements": [],
+      "updated": 1793683438654,
       "link": null,
       "locked": false,
       "points": [
@@ -1074,11 +1113,88 @@
       "endBinding": null,
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "aS"
+    },
+    {
+      "id": "frCWkhST3ZgOs_5dJmwzU",
+      "type": "text",
+      "x": 156.5,
+      "y": -12.5,
+      "width": 236,
+      "height": 35,
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "index": "aT",
+      "roundness": null,
+      "seed": 1567413186,
+      "version": 103,
+      "versionNonce": 186589278,
+      "isDeleted": false,
+      "boundElements": null,
+      "updated": 1793684063558,
+      "link": null,
+      "locked": false,
+      "text": "STDIO",
+      "fontSize": 28,
+      "fontFamily": 5,
+      "textAlign": "center",
+      "verticalAlign": "top",
+      "containerId": null,
+      "originalText": "STDIO",
+      "autoResize": false,
+      "lineHeight": 1.25
+    },
+    {
+      "id": "AVvpUTZVbsb0cB648Wmrh",
+      "type": "text",
+      "x": 663.5,
+      "y": -14.5,
+      "width": 291.00000000000006,
+      "height": 35,
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "index": "aU",
+      "roundness": null,
+      "seed": 657020254,
+      "version": 246,
+      "versionNonce": 897278110,
+      "isDeleted": false,
+      "boundElements": null,
+      "updated": 1793683595219,
+      "link": null,
+      "locked": false,
+      "text": "Streamable HTTP",
+      "fontSize": 28,
+      "fontFamily": 5,
+      "textAlign": "center",
+      "verticalAlign": "top",
+      "containerId": null,
+      "originalText": "Streamable HTTP",
+      "autoResize": false,
+      "lineHeight": 1.25
     }
   ],
   "appState": {
-    "gridSize": null,
+    "gridSize": 20,
+    "gridStep": 5,
+    "gridModeEnabled": false,
     "viewBackgroundColor": "#ffffff"
   },
   "files": {}
