@@ -24,13 +24,6 @@ export class AuthError extends DakError {
   }
 }
 
-/** Feature the workspace does not offer (edition, admin setting or missing system tables). */
-export class UnsupportedError extends DakError {
-  constructor(message: string, options?: ErrorOptions) {
-    super("UNSUPPORTED", message, options);
-  }
-}
-
 /** Tool argument that cannot be used, such as a malformed table name. */
 export class InvalidArgumentError extends DakError {
   constructor(message: string) {

@@ -46,9 +46,9 @@ Optional: pin a SQL warehouse by adding `warehouse_id = <id>` to the `[dev]` sec
 dak doctor --profile dev
 ```
 
-`dak doctor` checks authentication, identity, warehouse, a `SELECT 1`, `information_schema`, lineage system tables,
-result download, the export directory, log storage, the Databricks CLI version and the write mode. It prints the next step
-for anything that fails. Exit code `1` means at least one required check failed.
+`dak doctor` checks authentication, identity, warehouse, a `SELECT 1`, `information_schema` (used by `search_metadata`),
+result download, the export directory, log storage, the metadata cache, the Databricks CLI version and the write mode. It
+prints the next step for anything that fails. Exit code `1` means at least one required check failed.
 
 ## 4. Register the server in your agent
 
@@ -66,11 +66,11 @@ Start a session in your agent and ask a question about a table you can read. The
 suggest:
 
 1. `search_metadata` or `list_objects` to find the table.
-2. `describe_table` to read its columns, comments and keys, with `sample_rows` for a quick look.
+2. `describe_table` to read its columns, comments and keys. It starts no warehouse.
 3. `execute_sql` to run the query. Large results come back truncated; ask the agent to aggregate or to export.
 
 ::: tip Better comments, better SQL
-The agent writes better SQL when the Unity Catalog tables have comments, tags and primary or foreign keys. Those are the
+The agent writes better SQL when the Unity Catalog tables have comments and primary or foreign keys. Those are the
 first thing to improve when answers are poor.
 :::
 

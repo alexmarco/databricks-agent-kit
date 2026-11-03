@@ -11,10 +11,10 @@ ADR 0009 and ADR 0010 moved plain statements and the statement requests of expor
 
 A new module, the **statement lookup** (`src/statement-lookup.ts`, `createStatementLookup({ statements, exports })`), answers questions about any statement id. It is a composition of the two modules that already own the facts; neither of them learns about the other.
 
-| Method                                    | Behaviour                                                                                                                                                                  |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `get(statementId, { waitSeconds? })`      | An id of an export gives `{ statementId, export }`, the export state now or, with `waitSeconds` above 0, the state when the export ends or the wait is spent. Any other id gives the `StatementResult` of `statements.get`, with the same wait |
-| `cancel(statementId)`                     | An id of a running export stops the export (local job, partial files and its Databricks statement) and gives `{ statementId, cancelled: true }`. A finished export is not cancelled: `{ statementId, cancelled: false, export }`. Any other id is cancelled with `statements.cancel` and gives `{ statementId, cancelled: true }` |
+| Method                               | Behaviour                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `get(statementId, { waitSeconds? })` | An id of an export gives `{ statementId, export }`, the export state now or, with `waitSeconds` above 0, the state when the export ends or the wait is spent. Any other id gives the `StatementResult` of `statements.get`, with the same wait                                                                                    |
+| `cancel(statementId)`                | An id of a running export stops the export (local job, partial files and its Databricks statement) and gives `{ statementId, cancelled: true }`. A finished export is not cancelled: `{ statementId, cancelled: false, export }`. Any other id is cancelled with `statements.cancel` and gives `{ statementId, cancelled: true }` |
 
 - **The lookup learns about running exports by asking the export manager** (`exports.get(statementId)`), not by being told. The manager already is the registry of its jobs; a second registry in the lifecycle would need a notification protocol on every state change and a construction cycle (the manager depends on the lifecycle). Asking keeps one owner per fact and the dependency graph acyclic: `statement lookup` depends on `statements` and `exports`, `exports` depends on `statements`.
 - **An unknown id is a plain statement.** Databricks is the authority on statements this process never saw (for example one submitted before a restart), so the lookup forwards it and Databricks' answer or error reaches the agent unchanged.
@@ -24,9 +24,9 @@ A new module, the **statement lookup** (`src/statement-lookup.ts`, `createStatem
 
 Alternatives considered:
 
-- *Teach the lifecycle about exports* (an export registry inside `src/statements.ts`, or an `exports` option on `createStatementLifecycle`): the lifecycle would depend on the manager and the manager on the lifecycle (a construction cycle that needs late binding), and the lifecycle would have to know export descriptors, which are the manager's. Rejected.
-- *Move `get`/`cancel` of plain statements into the export manager*: the manager would speak for statements it does not own, and every consumer of the manager would see a wider interface. Rejected.
-- *Leave the branch in the tool handler*: the handler keeps knowing the manager's internals (spec user story 6). Rejected.
+- _Teach the lifecycle about exports_ (an export registry inside `src/statements.ts`, or an `exports` option on `createStatementLifecycle`): the lifecycle would depend on the manager and the manager on the lifecycle (a construction cycle that needs late binding), and the lifecycle would have to know export descriptors, which are the manager's. Rejected.
+- _Move `get`/`cancel` of plain statements into the export manager_: the manager would speak for statements it does not own, and every consumer of the manager would see a wider interface. Rejected.
+- _Leave the branch in the tool handler_: the handler keeps knowing the manager's internals (spec user story 6). Rejected.
 
 ## Consequences
 

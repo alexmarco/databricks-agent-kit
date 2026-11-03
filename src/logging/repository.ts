@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import type { LogLevel } from "../config.ts";
+import { loadDatabaseSync } from "../sqlite.ts";
 
 /** Lifecycle of an execution: `started` until it completes, fails or is cancelled. */
 export type ExecutionStatus = "started" | "completed" | "failed" | "cancelled";
@@ -119,21 +119,6 @@ CREATE INDEX IF NOT EXISTS idx_executions_started_at ON executions(started_at);
 `;
 
 type Row = Record<string, unknown>;
-
-/** Loads node:sqlite without its one-time ExperimentalWarning (stderr noise for MCP clients). */
-async function loadDatabaseSync(): Promise<typeof DatabaseSync> {
-  const originalEmitWarning = process.emitWarning;
-  process.emitWarning = function filtered(this: unknown, warning: string | Error, ...rest: unknown[]) {
-    const text = typeof warning === "string" ? warning : warning.message;
-    if (text.includes("SQLite")) return;
-    return (originalEmitWarning as (...args: unknown[]) => void).call(process, warning, ...rest);
-  } as typeof process.emitWarning;
-  try {
-    return (await import("node:sqlite")).DatabaseSync;
-  } finally {
-    process.emitWarning = originalEmitWarning;
-  }
-}
 
 function toExecution(row: Row): Execution {
   return {

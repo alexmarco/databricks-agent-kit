@@ -3,60 +3,116 @@
 `dak` exposes five tools. The definitions stay under 2,500 characters in total, so they cost little context in every
 session.
 
-| Tool | Parameters | Purpose |
-| --- | --- | --- |
-| `list_objects` | `catalog?`, `schema?`, `pattern?`, `limit?` | Without arguments, catalogs. With `catalog`, its schemas. With `catalog` and `schema`, its tables. `pattern` is a substring or a glob |
-| `describe_table` | `full_name`, `sample_rows?`, `lineage?` | Columns, comments, primary and foreign keys, clustering, partitioning and tags. Optional sample (at most 100 rows) and upstream or downstream lineage |
-| `search_metadata` | `query`, `catalog?`, `limit?` | Find tables and columns by name or comment |
-| `execute_sql` | `statement`, `parameters?`, `catalog?`, `schema?`, `row_limit?`, `warehouse_id?`, `export?` | One statement with `:name` parameters and bounded results. With `export`, the full result goes to a file |
-| `get_statement` | `statement_id`, `wait_seconds?`, `cancel?` | Follow up a statement still running after 30 seconds, or an export. `wait_seconds` goes from 0 to 30. `cancel: true` cancels it |
+| Tool              | Parameters                                                                                  | Purpose                                                                                                                                           |
+| ----------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_objects`    | `catalog?`, `schema?`, `pattern?`, `limit?`, `refresh?`                                     | Without arguments, catalogs. With `catalog`, its schemas. With `catalog` and `schema`, its tables. `pattern` is a substring or a glob. Cached     |
+| `describe_table`  | `full_name`, `refresh?`                                                                     | Columns, comments, primary and foreign keys, clustering, partitioning, owner and created or updated time and user. It starts no warehouse. Cached |
+| `search_metadata` | `query`, `catalog?`, `limit?`                                                               | Find tables and columns by name or comment                                                                                                        |
+| `execute_sql`     | `statement`, `parameters?`, `catalog?`, `schema?`, `row_limit?`, `warehouse_id?`, `export?` | One statement with `:name` parameters and bounded results. With `export`, the full result goes to a file                                          |
+| `get_statement`   | `statement_id`, `wait_seconds?`, `cancel?`                                                  | Follow up a statement still running after 30 seconds, or an export. `wait_seconds` goes from 0 to 30. `cancel: true` cancels it                   |
 
 ## The usual workflow
 
 Data questions follow the same path. The tools are designed for it, and they replace Genie for this purpose.
 
 ```mermaid
+---
+config:
+  sequence:
+    width: 120
+    actorMargin: 40
+    noteMargin: 8
+---
 sequenceDiagram
-  autonumber
   participant A as Agent
   participant D as dak
   participant U as Unity Catalog
   participant W as SQL warehouse
 
-  A->>D: search_metadata("orders")
-  D->>U: information_schema lookup
-  U-->>D: matching tables and columns
-  D-->>A: candidates
-  A->>D: describe_table(full_name, sample_rows=5)
-  D->>U: table metadata
-  D->>W: sample query (up to sample_rows rows)
-  D-->>A: columns, keys, tags, sample
-  A->>D: execute_sql(aggregated query)
-  D->>W: read-only check, then the statement
-  W-->>D: bounded result
-  D-->>A: rows, truncated flag
+  rect rgba(122, 79, 214, 0.14)
+    Note over A,W: search_metadata
+    A->>D: search_metadata("orders")
+    D->>U: information_schema lookup
+    U-->>D: matching tables<br/>and columns
+    D-->>A: candidates
+  end
+
+  rect rgba(47, 111, 219, 0.14)
+    Note over A,W: describe_table
+    A->>D: describe_table(full_name)
+    D->>U: table metadata
+    D-->>A: columns, keys,<br/>owner, audit times
+  end
+
+  rect rgba(30, 158, 98, 0.14)
+    Note over A,W: execute_sql
+    A->>D: execute_sql(aggregated query)
+    D->>W: read-only check,<br/>then the statement
+    W-->>D: bounded result
+    D-->>A: rows, truncated flag
+  end
+
   opt Result too large
-    A->>D: execute_sql(..., export = parquet)
-    D-->>A: statementId and export descriptor
-    A->>D: get_statement(statementId, wait_seconds = 30)
-    D-->>A: export status and files
+    rect rgba(30, 158, 98, 0.14)
+      Note over A,W: execute_sql with export
+      A->>D: execute_sql(...,<br/>export = parquet)
+      D-->>A: statementId and<br/>export descriptor
+    end
+    rect rgba(224, 123, 0, 0.14)
+      Note over A,W: get_statement
+      A->>D: get_statement(statementId,<br/>wait_seconds = 30)
+      D-->>A: export status and files
+    end
   end
 ```
 
 Aggregate in SQL when the result is large, and pass `export` when you need the full data in a file. The better your Unity
-Catalog comments, tags and keys, the better the agent's SQL.
+Catalog comments and keys, the better the agent's SQL.
 
 ## Details the table leaves out
 
 - **`list_objects`** returns `truncated` when more objects matched than `limit` (default 100, maximum 500). `schema` without
   `catalog` is an error.
 - **`search_metadata`** returns 50 matches by default, and at most 200.
-- **`describe_table`** reports a sample or a lineage that could not be read in `notes` instead of failing. Lineage comes
-  from `system.access.table_lineage`, which an admin must enable. See [authentication](/guide/authentication#privileges-by-capability).
+- **`describe_table`** makes one Unity Catalog API call and no SQL statement, so it works with no running warehouse. It
+  returns no tags, sample or lineage: ask for a sample with `execute_sql`. Times are ISO 8601.
+- **Metadata cache.** `describe_table` and `list_objects` answer from `cache.db` while the entry is fresh, without a request
+  to Databricks. A listing is cached whole, one entry per level, so one entry serves every `pattern` and `limit`.
+  The `cache` field of the answer has the `status`, which is `hit` (served from a fresh entry), `miss` (no entry yet),
+  `expired` (reloaded after the TTL), `refreshed` (reloaded because of `refresh: true`) or `bypassed` (the cache could not
+  be read or written, so the answer came straight from Databricks and a `warn` is logged), and `cachedAt`, the ISO 8601
+  time the answer was loaded. Pass `refresh: true` when you suspect a table or schema changed, for example after a DDL statement: the
+  fresh answer replaces the entry. An error is never cached, and a failed reload returns the error, never the old answer.
+  The TTL is `DAK_CACHE_TTL`, see [configuration](/guide/configuration). With `DAK_CACHE_TTL=0` the answers have no `cache`
+  field.
 - **`execute_sql`** takes `parameters` as a list of `{ name, value, type? }`. The value goes through the API and is never
   interpolated into the SQL text.
 - **`get_statement`** follows any statement that is still running. A statement that runs longer than 30 seconds returns
   its `statement_id` so you can wait for it.
+
+## Cache statistics
+
+Two kinds of resource, not tools, show how well the metadata cache works. They cover only the entries of the credentials
+the server uses, never those of another identity, and reading them changes no counter.
+
+| Resource                                                                      | Content                                                                                                         |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `resource://cache/stats`                                                      | The totals and the figures of each kind (`table`, `listing`)                                                    |
+| `resource://cache/entry/table/{full_name}`                                    | One cached table description                                                                                    |
+| `resource://cache/entry/listing/{path}` and `resource://cache/entry/listing/` | One cached listing: `catalog` (its schemas), `catalog.schema` (its tables), and the empty path for the catalogs |
+
+The statistics give `entries`, `hits`, `misses`, `expirations`, `refreshes`, `reloadsChanged` and `reloadsUnchanged`
+(how many reloads found a different answer and how many the same), `hitRatio`, `timeSavedMs` and `oldestLoadedAt`.
+
+- `hitRatio` is `hits / (hits + misses + expirations)`: the lookups a fresh entry could have served. A `refresh` is a
+  forced reload and does not count in it. It is `null` before any lookup. A ratio that stays low while `reloadsUnchanged`
+  is high means the TTL is shorter than it needs to be.
+- `timeSavedMs` is the sum, over the entries, of their hits times the duration of their last load from Databricks. It is
+  an estimate.
+- `bypassed` answers, where the cache itself failed, are not counted. They are in the log.
+- An entry also gives `cachedAt`, `expiresAt`, `lastUsedAt` and `lastLoadMs`. Names are not case-sensitive. An entry that is
+  not cached, because it was never looked up with this identity or was purged, answers `NOT_FOUND`.
+- With `DAK_CACHE_TTL=0` every one of these resources answers `{ "enabled": false }` with an explanation.
 
 ## Results and limits
 

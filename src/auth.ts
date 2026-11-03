@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +19,11 @@ export interface AuthProvider {
   readonly method: AuthMethod;
   /** `warehouse_id` of the selected profile, if any. */
   readonly profileWarehouseId: string | undefined;
+  /**
+   * SHA-256 of the host, the method and the credential that identifies the principal (ADR 0021): the token of a PAT,
+   * the `client_id` of OAuth M2M, the profile name of OAuth U2M. It holds no secret and tells two identities apart.
+   */
+  readonly cacheIdentity: string;
   /** Returns a valid bearer token, refreshing it shortly before it expires. */
   getToken(): Promise<string>;
 }
@@ -65,6 +71,12 @@ export function normalizeHost(host: string): string {
   return normalized;
 }
 
+function identityHash(host: string, method: AuthMethod, credential: string): string {
+  return createHash("sha256")
+    .update(JSON.stringify([host, method, credential]))
+    .digest("hex");
+}
+
 function cachedToken(
   deps: AuthDependencies,
   method: AuthMethod,
@@ -85,7 +97,13 @@ function cachedToken(
 }
 
 function patProvider(host: string, token: string, profileWarehouseId: string | undefined): AuthProvider {
-  return { host, method: "pat", profileWarehouseId, getToken: async () => token };
+  return {
+    host,
+    method: "pat",
+    profileWarehouseId,
+    cacheIdentity: identityHash(host, "pat", token),
+    getToken: async () => token,
+  };
 }
 
 function m2mProvider(
@@ -116,7 +134,13 @@ function m2mProvider(
     }
     return { token: payload.access_token, expiresAt: deps.now() + (payload.expires_in ?? 3600) * 1000 };
   });
-  return { host, method: "oauth-m2m", profileWarehouseId, getToken };
+  return {
+    host,
+    method: "oauth-m2m",
+    profileWarehouseId,
+    cacheIdentity: identityHash(host, "oauth-m2m", clientId),
+    getToken,
+  };
 }
 
 function u2mProvider(
@@ -159,7 +183,13 @@ function u2mProvider(
     const expiresAt = payload.expiry === undefined ? Number.NaN : Date.parse(payload.expiry);
     return { token: payload.access_token, expiresAt: Number.isNaN(expiresAt) ? deps.now() + 300_000 : expiresAt };
   });
-  return { host, method: "oauth-u2m", profileWarehouseId, getToken };
+  return {
+    host,
+    method: "oauth-u2m",
+    profileWarehouseId,
+    cacheIdentity: identityHash(host, "oauth-u2m", profile),
+    getToken,
+  };
 }
 
 function fromEnvironment(env: Environment, deps: AuthDependencies): AuthProvider | undefined {

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -121,6 +121,9 @@ async function startDatabricksStub(options: { warehouseFailures?: number } = {})
         warehouses: [{ id: "wh-e2e", name: "Serverless Starter", state: "RUNNING", enable_serverless_compute: true }],
       });
     }
+    if (request.method === "GET" && url.pathname === "/api/2.1/unity-catalog/catalogs") {
+      return send(200, { catalogs: [{ name: "main", comment: "Main" }, { name: "samples" }] });
+    }
     if (request.method === "GET" && url.pathname === "/api/2.1/unity-catalog/tables/main.sales.orders") {
       return send(200, {
         full_name: "main.sales.orders",
@@ -160,14 +163,6 @@ async function startDatabricksStub(options: { warehouseFailures?: number } = {})
           status: { state: "SUCCEEDED" },
           manifest: { schema: { columns: [{ name: "result", type_text: "INT" }] }, total_row_count: 1 },
           result: { data_array: [["1"]] },
-        });
-      }
-      if (statement.includes("information_schema")) {
-        return send(200, {
-          statement_id: "st-tags",
-          status: { state: "SUCCEEDED" },
-          manifest: { schema: { columns: [] }, total_row_count: 0 },
-          result: { data_array: [] },
         });
       }
       return send(200, {
@@ -372,6 +367,8 @@ test("stdio: a real dak mcp process serves tools, enforces read-only and persist
 
     const described = await client.callTool({ name: "describe_table", arguments: { full_name: "main.sales.orders" } });
     assert.equal(JSON.parse(text(described)).fullName, "main.sales.orders");
+    assert.equal(described.isError, undefined);
+    assert.equal(JSON.parse(text(described)).notes, undefined, "no SQL statement ran for the description");
 
     const recent = resourceJson((await client.readResource({ uri: "resource://logs/executions/recent" })).contents);
     const failedWrite = recent.executions.find(
@@ -568,6 +565,191 @@ test("http: rejected requests and Databricks retries are logged as warnings, the
   } finally {
     await client.close();
     await stopChild(child);
+    await stub.close();
+    await rm(storageDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
+const tableRequestCount = (stub: Awaited<ReturnType<typeof startDatabricksStub>>) =>
+  stub.requests.filter((request) => request === "GET /api/2.1/unity-catalog/tables/main.sales.orders").length;
+
+async function withDakChild(
+  stub: Awaited<ReturnType<typeof startDatabricksStub>>,
+  storageDir: string,
+  extraEnv: Record<string, string>,
+  run: (client: Client) => Promise<void>,
+): Promise<void> {
+  const client = new Client({ name: "e2e-cache", version: "1.0.0" });
+  await client.connect(
+    new StdioClientTransport({
+      command: process.execPath,
+      args: [cliPath, "mcp"],
+      env: { ...childEnv(stub.url, storageDir), ...extraEnv },
+      stderr: "pipe",
+    }),
+  );
+  try {
+    await run(client);
+  } finally {
+    await client.close();
+  }
+}
+
+test("stdio: describe_table is cached in cache.db across calls and processes, refresh reloads, and no secret is stored", {
+  timeout: 60_000,
+}, async () => {
+  const stub = await startDatabricksStub();
+  const storageDir = await mkdtemp(join(tmpdir(), "dak-e2e-"));
+  const describe = (client: Client, args: Record<string, unknown> = {}) =>
+    callJson(client, "describe_table", { full_name: "main.sales.orders", ...args });
+  try {
+    await withDakChild(stub, storageDir, {}, async (client) => {
+      assert.equal((await describe(client)).cache.status, "miss");
+      assert.equal((await describe(client)).cache.status, "hit");
+      assert.equal(tableRequestCount(stub), 1, "the hit does not reach the Databricks stub");
+      assert.equal((await describe(client, { refresh: true })).cache.status, "refreshed");
+      assert.equal(tableRequestCount(stub), 2);
+    });
+    await withDakChild(stub, storageDir, {}, async (client) => {
+      assert.equal((await describe(client)).cache.status, "hit", "a new process reads the entry of the first");
+      assert.equal(tableRequestCount(stub), 2);
+    });
+    assert.equal(
+      stub.requests.some((request) => request.includes("/api/2.0/sql/")),
+      false,
+      "describing a table never touches a SQL warehouse",
+    );
+    const cacheFiles = (await readdir(storageDir)).filter((name) => name.startsWith("cache.db"));
+    assert.ok(cacheFiles.includes("cache.db"));
+    for (const name of cacheFiles) {
+      assert.equal((await readFile(join(storageDir, name))).includes(TOKEN), false, `${name} holds no token`);
+    }
+  } finally {
+    await stub.close();
+    await rm(storageDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
+test("stdio: DAK_CACHE_TTL=0 disables the cache: no cache field and no cache.db", { timeout: 60_000 }, async () => {
+  const stub = await startDatabricksStub();
+  const storageDir = await mkdtemp(join(tmpdir(), "dak-e2e-"));
+  try {
+    await withDakChild(stub, storageDir, { DAK_CACHE_TTL: "0" }, async (client) => {
+      const first = await callJson(client, "describe_table", { full_name: "main.sales.orders" });
+      await callJson(client, "describe_table", { full_name: "main.sales.orders" });
+      assert.equal(first.cache, undefined);
+      assert.equal(tableRequestCount(stub), 2);
+    });
+    assert.deepEqual(
+      (await readdir(storageDir)).filter((name) => name.startsWith("cache.db")),
+      [],
+    );
+  } finally {
+    await stub.close();
+    await rm(storageDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
+test("stdio: a corrupt cache.db does not reach the agent as an error", { timeout: 60_000 }, async () => {
+  const stub = await startDatabricksStub();
+  const storageDir = await mkdtemp(join(tmpdir(), "dak-e2e-"));
+  try {
+    await writeFile(join(storageDir, "cache.db"), "this is not a SQLite database".repeat(50));
+    await withDakChild(stub, storageDir, {}, async (client) => {
+      const first = await callJson(client, "describe_table", { full_name: "main.sales.orders" });
+      assert.equal(first.fullName, "main.sales.orders");
+      assert.equal(first.cache.status, "miss");
+      assert.equal((await callJson(client, "describe_table", { full_name: "main.sales.orders" })).cache.status, "hit");
+    });
+  } finally {
+    await stub.close();
+    await rm(storageDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
+test("stdio: list_objects is cached whatever the pattern and limit, and refresh reloads it", {
+  timeout: 60_000,
+}, async () => {
+  const stub = await startDatabricksStub();
+  const storageDir = await mkdtemp(join(tmpdir(), "dak-e2e-"));
+  const catalogRequests = () =>
+    stub.requests.filter((request) => request.startsWith("GET /api/2.1/unity-catalog/catalogs")).length;
+  try {
+    await withDakChild(stub, storageDir, {}, async (client) => {
+      const first = await callJson(client, "list_objects", { pattern: "sam" });
+      assert.equal(first.cache.status, "miss");
+      assert.deepEqual(
+        first.items.map((item: { name: string }) => item.name),
+        ["samples"],
+      );
+      const second = await callJson(client, "list_objects", { limit: 1 });
+      assert.equal(second.cache.status, "hit");
+      assert.equal(second.truncated, true);
+      assert.equal(catalogRequests(), 1, "the second listing does not reach the stub");
+      assert.equal((await callJson(client, "list_objects", { refresh: true })).cache.status, "refreshed");
+      assert.equal(catalogRequests(), 2);
+    });
+  } finally {
+    await stub.close();
+    await rm(storageDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
+test("stdio: the cache resources report a known sequence of calls and reading them changes nothing", {
+  timeout: 60_000,
+}, async () => {
+  const stub = await startDatabricksStub();
+  const storageDir = await mkdtemp(join(tmpdir(), "dak-e2e-"));
+  try {
+    await withDakChild(stub, storageDir, {}, async (client) => {
+      const table = { full_name: "main.sales.orders" };
+      await callJson(client, "describe_table", table); // miss
+      await callJson(client, "describe_table", table); // hit
+      await callJson(client, "describe_table", table); // hit
+      await callJson(client, "list_objects", {}); // miss
+      await callJson(client, "list_objects", { pattern: "sam" }); // hit
+
+      const stats = await readResourceJson(client, "resource://cache/stats");
+      assert.equal(stats.enabled, true);
+      assert.deepEqual(
+        [stats.total.entries, stats.total.hits, stats.total.misses, stats.total.hitRatio],
+        [2, 3, 2, 0.6],
+      );
+      assert.deepEqual(
+        [stats.byKind.table.hits, stats.byKind.table.misses, stats.byKind.listing.hits, stats.byKind.listing.misses],
+        [2, 1, 1, 1],
+      );
+      assert.equal(typeof stats.total.timeSavedMs, "number");
+      assert.deepEqual(await readResourceJson(client, "resource://cache/stats"), stats, "reading changes no counter");
+
+      const entry = await readResourceJson(client, "resource://cache/entry/table/MAIN.sales.orders");
+      assert.equal(entry.hits, 2);
+      assert.equal(entry.misses, 1);
+      for (const field of ["cachedAt", "expiresAt", "lastUsedAt"]) assert.match(entry[field], /^\d{4}-\d\d-\d\dT/);
+      assert.equal(typeof entry.lastLoadMs, "number");
+      assert.equal((await readResourceJson(client, "resource://cache/entry/listing/")).hits, 1);
+      await assert.rejects(
+        client.readResource({ uri: "resource://cache/entry/table/main.sales.never" }),
+        /No cache entry for table 'main.sales.never'/,
+      );
+    });
+  } finally {
+    await stub.close();
+    await rm(storageDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
+test("stdio: with DAK_CACHE_TTL=0 the cache resources say the cache is disabled", { timeout: 60_000 }, async () => {
+  const stub = await startDatabricksStub();
+  const storageDir = await mkdtemp(join(tmpdir(), "dak-e2e-"));
+  try {
+    await withDakChild(stub, storageDir, { DAK_CACHE_TTL: "0" }, async (client) => {
+      for (const uri of ["resource://cache/stats", "resource://cache/entry/table/main.sales.orders"]) {
+        const payload = await readResourceJson(client, uri);
+        assert.equal(payload.enabled, false, uri);
+      }
+    });
+  } finally {
     await stub.close();
     await rm(storageDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }

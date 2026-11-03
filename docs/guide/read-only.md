@@ -13,25 +13,7 @@ Everything else is rejected with a `Read-only mode` message, and no statement re
 
 ## How a statement is checked
 
-```mermaid
-flowchart TD
-  s(["Statement from the agent"]) --> semi{"Has a ';' before its end?"}
-  semi -- yes --> rej1(["Rejected: Read-only mode"])
-  semi -- no --> first{"Starts with SHOW, DESCRIBE, DESC or EXPLAIN?"}
-  first -- yes --> run1["Runs directly, no extra call"]
-  first -- no --> dq{"Accepted as a query?"}
-  dq -- yes --> run2["Runs, one extra call for the check"]
-  dq -- no --> rej2(["Rejected: Read-only mode"])
-
-  classDef step fill:#E8F1FF,stroke:#2F6FDB,color:#1F2937
-  classDef choice fill:#FFF4E5,stroke:#E07B00,color:#1F2937
-  classDef ok fill:#E6F7EE,stroke:#1E9E62,color:#1F2937
-  classDef bad fill:#FDE8E8,stroke:#C81E1E,color:#1F2937
-  class s step
-  class semi,first,dq choice
-  class run1,run2 ok
-  class rej1,rej2 bad
-```
+![A statement with a semicolon before its end is rejected; one that starts with SHOW, DESCRIBE, DESC or EXPLAIN runs directly; any other runs only if it is accepted as a query, after one extra call, and is rejected otherwise](/diagrams/read-only-check.svg)
 
 1. **Semicolons.** A statement with a `;` before its end is rejected, whether it holds several statements or a `;` inside
    a string literal. The check cannot tell the two apart. A single trailing `;` is fine. To use a literal that contains
@@ -72,10 +54,10 @@ mode.
 
 ## Troubleshooting a rejection
 
-| Message | What to do |
-| --- | --- |
+| Message                                                | What to do                                                                       |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------- |
 | `Read-only mode: ...` with a statement that is a query | Remove a leading comment, or move literal `;` characters into `:name` parameters |
-| `Read-only mode: ...` for a write | Expected. Restart with `--allow-writes` only if writes are intended |
-| `Read-only check did not finish ...` | The warehouse is starting. Retry in a moment |
+| `Read-only mode: ...` for a write                      | Expected. Restart with `--allow-writes` only if writes are intended              |
+| `Read-only check did not finish ...`                   | The warehouse is starting. Retry in a moment                                     |
 
 More cases are in [troubleshooting](/guide/troubleshooting).

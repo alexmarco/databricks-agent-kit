@@ -15,6 +15,7 @@ import { startHttpServer } from "./http.ts";
 import { openLogRepository } from "./logging/repository.ts";
 import { createRateLimitedLogger } from "./logging/rate-limit.ts";
 import { createLogService } from "./logging/service.ts";
+import { checkMetadataCache } from "./metadata-cache.ts";
 import { createMcpServer } from "./server.ts";
 import { connectWorkspace, createWorkspaceSession, type WorkspaceAdapters } from "./workspace-session.ts";
 
@@ -24,7 +25,7 @@ const { version } = JSON.parse(readFileSync(join(installDir, "package.json"), "u
 const ENVIRONMENT_HELP = `
 Environment: DATABRICKS_HOST, DATABRICKS_TOKEN, DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET,
 DATABRICKS_CONFIG_PROFILE, DATABRICKS_CONFIG_FILE, DATABRICKS_WAREHOUSE_ID, DAK_ALLOW_WRITES, DAK_MAX_ROWS,
-DAK_HTTP_HOST, DAK_HTTP_PORT, DAK_HTTP_TOKEN, DAK_STORAGE_DIR, DAK_EXPORT_DIR, DAK_EXPORT_MAX_BYTES, DAK_LOG_LEVEL.
+DAK_HTTP_HOST, DAK_HTTP_PORT, DAK_HTTP_TOKEN, DAK_STORAGE_DIR, DAK_EXPORT_DIR, DAK_EXPORT_MAX_BYTES, DAK_CACHE_TTL, DAK_LOG_LEVEL.
 `;
 
 const clientDependencies: ClientDependencies = {
@@ -66,6 +67,7 @@ async function runMcp(settings: Settings): Promise<void> {
     },
     logs,
     exportDir: settings.exportDir,
+    cache: { path: join(settings.storageDir, "cache.db"), ttlSeconds: settings.cacheTtlSeconds },
   });
   const factory = () =>
     createMcpServer({
@@ -129,6 +131,7 @@ async function runDoctorCommand(settings: Settings): Promise<number> {
       connectWorkspace(workspaceAdapters(settings), { warehouseId: settings.warehouseId, limits: DOCTOR_LIMITS }),
     runCli: (args) => defaultAuthDependencies(process.env).runCli(args),
     openRepository: openLogRepository,
+    checkCache: checkMetadataCache,
     fetch: clientDependencies.fetch,
     ensureExportDir: ensureWritableDirectory,
   });

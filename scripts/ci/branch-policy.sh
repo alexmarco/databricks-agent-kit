@@ -20,9 +20,9 @@ case "$target_branch" in
     ;;
   develop)
     case "$source_branch" in
-      feature/* | bugfix/* | hotfix/*) exit 0 ;;
+      feature/* | bugfix/* | hotfix/* | dependabot/*) exit 0 ;;
     esac
-    reason="A pull request into \"develop\" must come from a \"feature/*\", \"bugfix/*\" or \"hotfix/*\" branch, not from \"$source_branch\"."
+    reason="A pull request into \"develop\" must come from a \"feature/*\", \"bugfix/*\", \"hotfix/*\" or \"dependabot/*\" branch, not from \"$source_branch\"."
     ;;
   *)
     reason="A pull request from \"$source_branch\" must target \"develop\" or \"main\", not \"$target_branch\"."

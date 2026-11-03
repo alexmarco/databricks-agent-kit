@@ -36,6 +36,7 @@ test("resolveSettings applies defaults", () => {
     storageDir: stateDir,
     exportDir: join(stateDir, "exports"),
     exportMaxBytes: 10 * 1024 ** 3,
+    cacheTtlSeconds: 86_400,
     logLevel: "info",
   });
 });
@@ -46,6 +47,11 @@ test("resolveSettings: export directory and size limit come from the environment
   assert.equal(overridden.exportMaxBytes, 5000);
   assert.equal(resolveSettings({}, {}, "/state").exportDir, join("/state", "exports"));
   assert.equal(resolveSettings({}, { DAK_STORAGE_DIR: "/s" }, "/state").exportDir, join("/s", "exports"));
+});
+
+test("resolveSettings: DAK_CACHE_TTL is in seconds and 0 disables the cache", () => {
+  assert.equal(resolveSettings({}, { DAK_CACHE_TTL: "3600" }, stateDir).cacheTtlSeconds, 3600);
+  assert.equal(resolveSettings({}, { DAK_CACHE_TTL: "0" }, stateDir).cacheTtlSeconds, 0);
 });
 
 test("resolveSettings: flags override environment", () => {
@@ -101,4 +107,11 @@ test("resolveSettings rejects invalid values", () => {
   assert.throws(() => resolveSettings({}, { DAK_EXPORT_MAX_BYTES: "0" }, stateDir), /DAK_EXPORT_MAX_BYTES/);
   assert.throws(() => resolveSettings({ port: "abc" }, {}, stateDir), /port/i);
   assert.throws(() => resolveSettings({}, { DAK_LOG_LEVEL: "loud" }, stateDir), /DAK_LOG_LEVEL/);
+  for (const invalid of ["-1", "abc", "1.5", ""]) {
+    assert.throws(
+      () => resolveSettings({}, { DAK_CACHE_TTL: invalid }, stateDir),
+      /DAK_CACHE_TTL must be a whole number of seconds, 0 or more/,
+      `DAK_CACHE_TTL='${invalid}'`,
+    );
+  }
 });

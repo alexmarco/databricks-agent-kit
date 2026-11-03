@@ -38,9 +38,30 @@ Node.js 22.18 or later is required (type stripping is unflagged from that versio
 - Record every relevant technical decision as an ADR in `docs/adr/` and update `docs/design.md` when the design changes. A superseded ADR is not rewritten: add a new one.
 - The Unity Catalog permissions of the configured identity are the real security boundary. The read-only check is defense in depth.
 
+## Issue tracker
+
+- Work items are GitHub issues in `alexmarco/databricks-agent-kit`, managed with the `gh` CLI.
+- A ticket has the title `<Topic> NN: <title>`, the sections "What to build", "Acceptance criteria" and "Blocked by" (`#N` references), and the label `ready-for-agent` when an agent can take it.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues of `alexmarco/databricks-agent-kit`, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
 ## Git
 
 - Never commit directly to `main`. Work on a branch and keep commits atomic, one logical change each.
 - Use Conventional Commits: `type(scope): description`.
 - If a pre-commit or commit message check fails, fix the cause and commit again; never skip the hooks.
 - Do not force-push shared branches.
+
+## Repository mechanics
+
+- `main` is the default branch. Work reaches `develop` first and `main` only through a release. GitHub reads repository configuration such as `.github/dependabot.yml` from `main`, so a change to it takes effect after the next release, or sooner through a `hotfix/*`. Confirm the effect on the branch GitHub reads before reporting a configuration change as done.
+- A pull request needs one code-owner approval, and the maintainer is the only code owner. Open the pull request, report its checks, and ask the maintainer to merge it in the web UI with the bypass.
+- Diagrams: read `docs/diagrams-src/README.md` before creating, editing or checking one.
