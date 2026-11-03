@@ -121,6 +121,9 @@ async function startDatabricksStub(options: { warehouseFailures?: number } = {})
         warehouses: [{ id: "wh-e2e", name: "Serverless Starter", state: "RUNNING", enable_serverless_compute: true }],
       });
     }
+    if (request.method === "GET" && url.pathname === "/api/2.1/unity-catalog/catalogs") {
+      return send(200, { catalogs: [{ name: "main", comment: "Main" }, { name: "samples" }] });
+    }
     if (request.method === "GET" && url.pathname === "/api/2.1/unity-catalog/tables/main.sales.orders") {
       return send(200, {
         full_name: "main.sales.orders",
@@ -657,6 +660,34 @@ test("stdio: a corrupt cache.db does not reach the agent as an error", { timeout
       assert.equal(first.fullName, "main.sales.orders");
       assert.equal(first.cache.status, "miss");
       assert.equal((await callJson(client, "describe_table", { full_name: "main.sales.orders" })).cache.status, "hit");
+    });
+  } finally {
+    await stub.close();
+    await rm(storageDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
+test("stdio: list_objects is cached whatever the pattern and limit, and refresh reloads it", {
+  timeout: 60_000,
+}, async () => {
+  const stub = await startDatabricksStub();
+  const storageDir = await mkdtemp(join(tmpdir(), "dak-e2e-"));
+  const catalogRequests = () =>
+    stub.requests.filter((request) => request.startsWith("GET /api/2.1/unity-catalog/catalogs")).length;
+  try {
+    await withDakChild(stub, storageDir, {}, async (client) => {
+      const first = await callJson(client, "list_objects", { pattern: "sam" });
+      assert.equal(first.cache.status, "miss");
+      assert.deepEqual(
+        first.items.map((item: { name: string }) => item.name),
+        ["samples"],
+      );
+      const second = await callJson(client, "list_objects", { limit: 1 });
+      assert.equal(second.cache.status, "hit");
+      assert.equal(second.truncated, true);
+      assert.equal(catalogRequests(), 1, "the second listing does not reach the stub");
+      assert.equal((await callJson(client, "list_objects", { refresh: true })).cache.status, "refreshed");
+      assert.equal(catalogRequests(), 2);
     });
   } finally {
     await stub.close();

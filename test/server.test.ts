@@ -265,6 +265,21 @@ test("describe_table no longer accepts sample_rows or lineage and passes only th
   });
 });
 
+test("list_objects passes refresh to the metadata service and its description tells about it", async () => {
+  await withLogs("stdio", async (context) => {
+    const connection = await connect(context);
+    await connection.client.callTool({ name: "list_objects", arguments: { catalog: "main", refresh: true } });
+    await connection.client.callTool({ name: "list_objects", arguments: { catalog: "main" } });
+    assert.deepEqual(
+      connection.services.listCalls.map((call) => call.refresh),
+      [true, undefined],
+    );
+    const { tools } = await connection.client.listTools();
+    assert.match(tools.find((tool) => tool.name === "list_objects")?.description ?? "", /refresh/);
+    await closeAll(connection);
+  });
+});
+
 test("describe_table passes refresh to the metadata service and its description tells about it", async () => {
   await withLogs("stdio", async (context) => {
     const connection = await connect(context);

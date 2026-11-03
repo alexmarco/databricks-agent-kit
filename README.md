@@ -224,7 +224,7 @@ Five tools keep the definitions under 2,500 characters in total, so they cost li
 
 | Tool              | Parameters                                                                                  | Purpose                                                                                                                                                                     |
 | ----------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list_objects`    | `catalog?`, `schema?`, `pattern?`, `limit?`                                                 | Without arguments, catalogs; with `catalog`, its schemas; with `catalog` and `schema`, its tables. `pattern` is a substring or glob                                         |
+| `list_objects`    | `catalog?`, `schema?`, `pattern?`, `limit?`, `refresh?`                                     | Without arguments, catalogs; with `catalog`, its schemas; with `catalog` and `schema`, its tables. `pattern` is a substring or glob. Cached                                 |
 | `describe_table`  | `full_name`, `refresh?`                                                                     | Columns, comments, primary/foreign keys, clustering, partitioning, owner and created/updated time and user. One Unity Catalog API call: it never starts a warehouse. Cached |
 | `search_metadata` | `query`, `catalog?`, `limit?`                                                               | Find tables and columns by name or comment                                                                                                                                  |
 | `execute_sql`     | `statement`, `parameters?`, `catalog?`, `schema?`, `row_limit?`, `warehouse_id?`, `export?` | One statement with `:name` parameters and bounded results; with `export`, the full result goes to a file                                                                    |
@@ -236,10 +236,12 @@ Details that the table leaves out:
   without `catalog` is an error. `search_metadata` returns 50 matches by default (maximum 200).
 - `describe_table` makes one Unity Catalog API call and no SQL statement, so it works with no running warehouse. It does not
   return tags, a data sample or lineage: ask for a sample with `execute_sql`.
-- `describe_table` answers from the metadata cache (`cache.db` in the storage directory) while the entry is fresh, with no
-  request to Databricks. Its `cache` field gives the `status` (`hit`, `miss`, `expired`, `refreshed` or `bypassed`, when
-  the cache failed and the answer came straight from Databricks) and `cachedAt`, the time the answer was loaded. `refresh: true` skips the entry and replaces it with the current
-  answer; use it after changing a table. Entries are fresh for `DAK_CACHE_TTL` seconds (24 hours by default; `0` disables
+- `describe_table` and `list_objects` answer from the metadata cache (`cache.db` in the storage directory) while the entry
+  is fresh, with no request to Databricks. A listing is cached whole, one entry per level (catalogs, the schemas of a
+  catalog, the tables of a schema), so a second `list_objects` of the same level makes no request whatever its `pattern`
+  and `limit`. The `cache` field gives the `status` (`hit`, `miss`, `expired`, `refreshed` or `bypassed`, when the cache
+  failed and the answer came straight from Databricks) and `cachedAt`, the time the answer was loaded. `refresh: true`
+  skips the entry and replaces it with the current answer; use it after changing a table or schema. Entries are fresh for `DAK_CACHE_TTL` seconds (24 hours by default; `0` disables
   the cache and the `cache` field) and are kept apart for each credential. An error from Databricks is never cached and
   never replaced by an old answer.
 - `parameters` is a list of `{ name, value, type? }`; the value is sent through the API, never interpolated into the SQL.

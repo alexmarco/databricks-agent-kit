@@ -5,7 +5,7 @@ session.
 
 | Tool              | Parameters                                                                                  | Purpose                                                                                                                                           |
 | ----------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list_objects`    | `catalog?`, `schema?`, `pattern?`, `limit?`                                                 | Without arguments, catalogs. With `catalog`, its schemas. With `catalog` and `schema`, its tables. `pattern` is a substring or a glob             |
+| `list_objects`    | `catalog?`, `schema?`, `pattern?`, `limit?`, `refresh?`                                     | Without arguments, catalogs. With `catalog`, its schemas. With `catalog` and `schema`, its tables. `pattern` is a substring or a glob. Cached     |
 | `describe_table`  | `full_name`, `refresh?`                                                                     | Columns, comments, primary and foreign keys, clustering, partitioning, owner and created or updated time and user. It starts no warehouse. Cached |
 | `search_metadata` | `query`, `catalog?`, `limit?`                                                               | Find tables and columns by name or comment                                                                                                        |
 | `execute_sql`     | `statement`, `parameters?`, `catalog?`, `schema?`, `row_limit?`, `warehouse_id?`, `export?` | One statement with `:name` parameters and bounded results. With `export`, the full result goes to a file                                          |
@@ -76,11 +76,12 @@ Catalog comments and keys, the better the agent's SQL.
 - **`search_metadata`** returns 50 matches by default, and at most 200.
 - **`describe_table`** makes one Unity Catalog API call and no SQL statement, so it works with no running warehouse. It
   returns no tags, sample or lineage: ask for a sample with `execute_sql`. Times are ISO 8601.
-- **Metadata cache.** `describe_table` answers from `cache.db` while the entry is fresh, without a request to Databricks.
+- **Metadata cache.** `describe_table` and `list_objects` answer from `cache.db` while the entry is fresh, without a request
+  to Databricks. A listing is cached whole, one entry per level, so one entry serves every `pattern` and `limit`.
   The `cache` field of the answer has the `status`, which is `hit` (served from a fresh entry), `miss` (no entry yet),
   `expired` (reloaded after the TTL), `refreshed` (reloaded because of `refresh: true`) or `bypassed` (the cache could not
   be read or written, so the answer came straight from Databricks and a `warn` is logged), and `cachedAt`, the ISO 8601
-  time the answer was loaded. Pass `refresh: true` when you suspect the table changed, for example after a DDL statement: the
+  time the answer was loaded. Pass `refresh: true` when you suspect a table or schema changed, for example after a DDL statement: the
   fresh answer replaces the entry. An error is never cached, and a failed reload returns the error, never the old answer.
   The TTL is `DAK_CACHE_TTL`, see [configuration](/guide/configuration). With `DAK_CACHE_TTL=0` the answers have no `cache`
   field.

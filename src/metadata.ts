@@ -64,6 +64,8 @@ export interface ObjectListing {
   level: "catalogs" | "schemas" | "tables";
   items: Array<NamedItem | TableSummary>;
   truncated: boolean;
+  /** How the listing was served; absent when the cache is disabled. */
+  cache?: CacheInfo;
 }
 
 interface ApiTable {
@@ -161,26 +163,41 @@ export function createMetadataService(
     return tables.map((table) => ({ name: table.name, type: table.table_type, comment: table.comment }));
   }
 
-  /** Lists catalogs, the schemas of a catalog, or the tables of a schema; the pattern is applied before the limit. */
+  /**
+   * Lists catalogs, the schemas of a catalog, or the tables of a schema; the pattern is applied before the limit. The
+   * full listing of the level comes from the cache when it holds a fresh entry (`refresh` skips it), so one entry
+   * serves every pattern and limit.
+   */
   async function listObjects(request: {
     catalog?: string | undefined;
     schema?: string | undefined;
     pattern?: string | undefined;
     limit?: number | undefined;
+    refresh?: boolean | undefined;
   }): Promise<ObjectListing> {
     if (request.schema !== undefined && request.catalog === undefined) {
       throw new InvalidArgumentError("'schema' requires 'catalog': pass both to list tables.");
     }
     const limit = clamp(request.limit, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
     const level = request.catalog === undefined ? "catalogs" : request.schema === undefined ? "schemas" : "tables";
-    const all: Array<NamedItem | TableSummary> =
+    const loadAll = (): Promise<Array<NamedItem | TableSummary>> =>
       level === "catalogs"
-        ? await listCatalogs()
+        ? listCatalogs()
         : level === "schemas"
-          ? await listSchemas(request.catalog ?? "")
-          : await listTables(request.catalog ?? "", request.schema ?? "");
+          ? listSchemas(request.catalog ?? "")
+          : listTables(request.catalog ?? "", request.schema ?? "");
+    const path = [request.catalog, request.schema].filter((part) => part !== undefined).join(".");
+    const { value: all, cache: info } =
+      cache === undefined
+        ? { value: await loadAll(), cache: undefined }
+        : await cache.lookup("listing", path, loadAll, { refresh: request.refresh });
     const matching = all.filter((item) => matchesPattern(item.name, request.pattern));
-    return { level, items: matching.slice(0, limit), truncated: matching.length > limit };
+    return {
+      level,
+      items: matching.slice(0, limit),
+      truncated: matching.length > limit,
+      ...(info === undefined ? {} : { cache: info }),
+    };
   }
 
   /** Reads a table description with the one Unity Catalog `GET`; it starts no warehouse. */

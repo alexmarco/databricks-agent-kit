@@ -46,6 +46,7 @@ function fakeWorkspace() {
         ? { statement_id: "st-export", status: { state: "PENDING" } }
         : succeeded;
     }
+    if (method === "GET" && path === "/api/2.1/unity-catalog/catalogs") return { catalogs: [{ name: "main" }] };
     if (method === "GET" && path === "/api/2.1/unity-catalog/tables/main.s.t")
       return { full_name: "main.s.t", columns: [] };
     if (method === "POST" && path.endsWith("/cancel")) return {};
@@ -367,6 +368,29 @@ test("a cache that fails is a warn in the log and a bypassed answer, never a too
       ["Metadata cache cannot be read; answering from Databricks"],
     );
     assert.equal(entries.find((entry) => entry.message === "Tool call completed")?.metadata?.cacheStatus, "bypassed");
+  });
+});
+
+test("list_objects reports its cache status on the final log entry", async () => {
+  await withLogs("stdio", async ({ logs, repository, dir }) => {
+    const session = createWorkspaceSession(adapters().adapters, {
+      ...sessionOptions(dir, logs),
+      cache: cacheOptions(dir, 3600),
+    });
+    for (const toolName of ["list_miss", "list_hit"]) {
+      await session.scope.run({ toolName }, async () => (await session.workspace()).metadata.listObjects({}), {
+        message: "Tool call completed",
+      });
+    }
+    await session.close();
+    logs.flush();
+    const statusOf = (toolName: string) => {
+      const execution = repository.recentExecutions(50).find((candidate) => candidate.toolName === toolName);
+      const entries = repository.executionDetail(execution?.executionId ?? "")?.logs ?? [];
+      return entries.find((entry) => entry.message === "Tool call completed")?.metadata?.cacheStatus;
+    };
+    assert.equal(statusOf("list_miss"), "miss");
+    assert.equal(statusOf("list_hit"), "hit");
   });
 });
 

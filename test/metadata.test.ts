@@ -572,3 +572,132 @@ test("a cache that fails still returns the error of a failed load", async () => 
     assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "bypassed");
   });
 });
+
+const listingRoutes = (
+  tables: unknown[] = tablesRoute["/api/2.1/unity-catalog/tables"].tables,
+): Record<string, unknown> => ({
+  "/api/2.1/unity-catalog/catalogs": { catalogs: [{ name: "main" }, { name: "samples" }] },
+  "/api/2.1/unity-catalog/schemas": { schemas: [{ name: "default" }, { name: "sales" }] },
+  "/api/2.1/unity-catalog/tables": { tables },
+});
+
+test("listObjects with a cache: a second call of the same level makes no request, whatever pattern and limit", async () => {
+  await withCache(async ({ open, clock }) => {
+    const { client, calls } = fakeClient(listingRoutes());
+    const metadata = createMetadataService(client, noStatements, await open());
+    const first = await metadata.listObjects({ catalog: "main", schema: "default", pattern: "ORDER*" });
+    assert.deepEqual(first.cache, { status: "miss", cachedAt: "2026-11-03T10:00:00.000Z" });
+    assert.deepEqual(
+      first.items.map((item) => item.name),
+      ["orders", "order_items"],
+    );
+    clock.now += MINUTE;
+    const second = await metadata.listObjects({ catalog: "main", schema: "default", pattern: "customers" });
+    assert.deepEqual(second.cache, { status: "hit", cachedAt: "2026-11-03T10:00:00.000Z" });
+    assert.deepEqual(
+      second.items.map((item) => item.name),
+      ["customers"],
+    );
+    const limited = await metadata.listObjects({ catalog: "main", schema: "default", limit: 2 });
+    assert.equal(limited.items.length, 2);
+    assert.equal(limited.truncated, true, "truncated is computed from the cached listing");
+    assert.equal(limited.cache?.status, "hit");
+    assert.equal(calls.length, 1, "one entry serves every pattern and limit");
+  });
+});
+
+test("listObjects with a cache: the three levels have separate entries and names in other case hit them", async () => {
+  await withCache(async ({ open }) => {
+    const { client, calls } = fakeClient(listingRoutes());
+    const metadata = createMetadataService(client, noStatements, await open());
+    for (const request of [{}, { catalog: "main" }, { catalog: "main", schema: "default" }]) {
+      assert.equal((await metadata.listObjects(request)).cache?.status, "miss", JSON.stringify(request));
+    }
+    assert.equal(calls.length, 3);
+    assert.equal((await metadata.listObjects({})).cache?.status, "hit");
+    assert.equal((await metadata.listObjects({ catalog: "MAIN" })).cache?.status, "hit");
+    assert.equal((await metadata.listObjects({ catalog: "Main", schema: "DEFAULT" })).cache?.status, "hit");
+    assert.equal(calls.length, 3);
+  });
+});
+
+test("listObjects with a cache: the pages are loaded once and the answer equals the one without a cache", async () => {
+  await withCache(async ({ open }) => {
+    const pages = () => [
+      { catalogs: [{ name: "main", comment: "Main" }], next_page_token: "p2" },
+      { catalogs: [{ name: "samples" }] },
+    ];
+    const cached = fakeClient({ "/api/2.1/unity-catalog/catalogs": pages() });
+    const metadata = createMetadataService(cached.client, noStatements, await open());
+    await metadata.listObjects({});
+    const hit = await metadata.listObjects({});
+    assert.equal(cached.calls.length, 2, "two pages, once");
+    const uncached = await createMetadataService(
+      fakeClient({ "/api/2.1/unity-catalog/catalogs": pages() }).client,
+      noStatements,
+    ).listObjects({});
+    assert.deepEqual(JSON.parse(JSON.stringify({ ...hit, cache: undefined })), JSON.parse(JSON.stringify(uncached)));
+  });
+});
+
+test("listObjects with a cache: refresh reloads the whole listing and replaces the entry", async () => {
+  await withCache(async ({ open, clock }) => {
+    const routes = listingRoutes();
+    const { client, calls } = fakeClient(routes);
+    const metadata = createMetadataService(client, noStatements, await open());
+    await metadata.listObjects({ catalog: "main", schema: "default" });
+    routes["/api/2.1/unity-catalog/tables"] = { tables: [{ name: "brand_new", table_type: "MANAGED" }] };
+    clock.now += MINUTE;
+    const refreshed = await metadata.listObjects({ catalog: "main", schema: "default", refresh: true });
+    assert.deepEqual(refreshed.cache, { status: "refreshed", cachedAt: "2026-11-03T10:01:00.000Z" });
+    assert.deepEqual(
+      refreshed.items.map((item) => item.name),
+      ["brand_new"],
+    );
+    const next = await metadata.listObjects({ catalog: "main", schema: "default" });
+    assert.equal(next.cache?.status, "hit");
+    assert.deepEqual(
+      next.items.map((item) => item.name),
+      ["brand_new"],
+    );
+    assert.equal(calls.length, 2);
+  });
+});
+
+test("listObjects with a cache: expiry, failed loads and a failing cache behave as for describeTable", async () => {
+  await withCache(async ({ open, clock, path, warnings }) => {
+    const { client, calls } = fakeClient(listingRoutes());
+    const metadata = createMetadataService(client, noStatements, await open({ ttlSeconds: 600 }));
+    await metadata.listObjects({ catalog: "main" });
+    clock.now += 11 * MINUTE;
+    assert.equal((await metadata.listObjects({ catalog: "main" })).cache?.status, "expired");
+    assert.equal(calls.length, 2);
+    await breakCacheFile(path);
+    const bypassed = await metadata.listObjects({ catalog: "main" });
+    assert.equal(bypassed.cache?.status, "bypassed");
+    assert.deepEqual(
+      bypassed.items.map((item) => item.name),
+      ["default", "sales"],
+    );
+    assert.equal(warnings.length, 1);
+  });
+});
+
+test("listObjects with a cache: a failed load is not stored", async () => {
+  await withCache(async ({ open }) => {
+    const cache = await open();
+    const { client, state } = flakyClient(listingRoutes());
+    const metadata = createMetadataService(client, noStatements, cache);
+    await assert.rejects(metadata.listObjects({ catalog: "main" }), /PERMISSION_DENIED/);
+    assert.equal(cache.entry("listing", "main"), undefined);
+    state.failing = false;
+    assert.equal((await metadata.listObjects({ catalog: "main" })).cache?.status, "miss");
+  });
+});
+
+test("listObjects still rejects a schema without a catalog when a cache is in use", async () => {
+  await withCache(async ({ open }) => {
+    const metadata = createMetadataService(fakeClient({}).client, noStatements, await open());
+    await assert.rejects(metadata.listObjects({ schema: "s" }), InvalidArgumentError);
+  });
+});

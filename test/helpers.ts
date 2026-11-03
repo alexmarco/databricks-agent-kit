@@ -29,6 +29,7 @@ export function fakeServices(logs: LogService) {
   const getStatementCalls: Array<{ statementId: string; options: unknown }> = [];
   const cancelledStatements: string[] = [];
   const describeCalls: unknown[][] = [];
+  const listCalls: Array<{ refresh?: boolean }> = [];
   const statements = {
     submit: async (request: ExecuteSqlRequest) => {
       sqlRequests.push(request);
@@ -51,7 +52,8 @@ export function fakeServices(logs: LogService) {
     ],
   } as unknown as WarehouseSelection;
   const metadata = {
-    listObjects: async (request: { catalog?: string; schema?: string }) => {
+    listObjects: async (request: { catalog?: string; schema?: string; refresh?: boolean }) => {
+      listCalls.push(request);
       if (request.catalog === undefined)
         return { level: "catalogs", items: [{ name: "main", comment: undefined }], truncated: false };
       if (request.schema === undefined)
@@ -118,6 +120,7 @@ export function fakeServices(logs: LogService) {
     getStatementCalls,
     cancelledStatements,
     describeCalls,
+    listCalls,
     exportCalls,
   };
 }

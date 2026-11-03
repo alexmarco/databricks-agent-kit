@@ -32,8 +32,8 @@ credential variables are `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `DATABRICKS_CLIE
   privileges. See [read-only mode](/guide/read-only#enabling-writes).
 - **Relative paths.** A relative `DAK_EXPORT_DIR` is resolved against the working directory of the server process. Prefer an
   absolute path.
-- **Metadata cache.** `describe_table` answers are kept in `cache.db` in the log storage directory, so a second
-  description of the same table makes no request to Databricks, in this session or in a later one. `DAK_CACHE_TTL` is the
+- **Metadata cache.** `describe_table` and `list_objects` answers are kept in `cache.db` in the log storage directory, so a
+  second description of the same table, or a second listing of the same level, makes no request to Databricks, in this session or in a later one. `DAK_CACHE_TTL` is the
   number of seconds an entry stays fresh, counted from the moment it was loaded; a new value applies at once to the entries
   already stored. `0` disables the cache: no `cache.db` is opened and answers carry no `cache` field. A negative or
   non-numeric value is rejected at startup. Each credential has its own entries, so two identities never share one.
