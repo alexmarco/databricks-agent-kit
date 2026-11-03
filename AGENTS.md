@@ -43,6 +43,16 @@ Node.js 22.18 or later is required (type stripping is unflagged from that versio
 - Work items are GitHub issues in `alexmarco/databricks-agent-kit`, managed with the `gh` CLI.
 - A ticket has the title `<Topic> NN: <title>`, the sections "What to build", "Acceptance criteria" and "Blocked by" (`#N` references), and the label `ready-for-agent` when an agent can take it.
 
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues of `alexmarco/databricks-agent-kit`, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
 ## Git
 
 - Never commit directly to `main`. Work on a branch and keep commits atomic, one logical change each.
