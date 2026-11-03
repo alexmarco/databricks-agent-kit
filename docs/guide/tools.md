@@ -15,33 +15,7 @@ session.
 
 Data questions follow the same path. The tools are designed for it, and they replace Genie for this purpose.
 
-```mermaid
-sequenceDiagram
-  autonumber
-  participant A as Agent
-  participant D as dak
-  participant U as Unity Catalog
-  participant W as SQL warehouse
-
-  A->>D: search_metadata("orders")
-  D->>U: information_schema lookup
-  U-->>D: matching tables and columns
-  D-->>A: candidates
-  A->>D: describe_table(full_name, sample_rows=5)
-  D->>U: table metadata
-  D->>W: sample query (up to sample_rows rows)
-  D-->>A: columns, keys, tags, sample
-  A->>D: execute_sql(aggregated query)
-  D->>W: read-only check, then the statement
-  W-->>D: bounded result
-  D-->>A: rows, truncated flag
-  opt Result too large
-    A->>D: execute_sql(..., export = parquet)
-    D-->>A: statementId and export descriptor
-    A->>D: get_statement(statementId, wait_seconds = 30)
-    D-->>A: export status and files
-  end
-```
+![The agent searches the metadata, describes a table with a sample, and runs a bounded query; when the result is too large it exports it and follows the export with get_statement](/diagrams/tools-sequence.svg)
 
 Aggregate in SQL when the result is large, and pass `export` when you need the full data in a file. The better your Unity
 Catalog comments, tags and keys, the better the agent's SQL.
