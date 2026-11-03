@@ -64,7 +64,8 @@ exit ${scenario.npmInstallFails ? 1 : 0}`,
   }
 }
 
-test("installs the latest release and prints the installed version", () => {
+// The Windows runner of the CI runs its own curl instead of the stub, so the lookup of the latest release cannot be simulated there.
+test("installs the latest release and prints the installed version", { skip: process.platform === "win32" }, () => {
   const result = runInstaller({ dakOnPath: true });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.npmCalls, [
@@ -84,7 +85,7 @@ test("installs the version in DAK_VERSION without looking up the latest release"
 });
 
 test("accepts the minimum Node.js version", () => {
-  const result = runInstaller({ nodeVersion: "22.18.0", dakOnPath: true });
+  const result = runInstaller({ nodeVersion: "22.18.0", dakOnPath: true }, { DAK_VERSION: "0.2.0" });
   assert.equal(result.status, 0, result.stderr);
 });
 
@@ -119,7 +120,7 @@ test("fails when DAK_VERSION is not a version", () => {
   }
 });
 
-// The Windows runner of the CI runs its own curl instead of the stub, so the failure cannot be simulated there.
+// Skipped on Windows for the same reason as the test of the latest release.
 test("fails when the latest release cannot be found", { skip: process.platform === "win32" }, () => {
   const result = runInstaller({ latestLookupFails: true });
   assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
@@ -128,13 +129,13 @@ test("fails when the latest release cannot be found", { skip: process.platform =
 });
 
 test("fails when npm cannot install the tarball", () => {
-  const result = runInstaller({ npmInstallFails: true });
+  const result = runInstaller({ npmInstallFails: true }, { DAK_VERSION: "0.2.0" });
   assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
   assert.match(result.stderr, /npm could not install .*databricks-agent-kit-0\.2\.0\.tgz/);
 });
 
 test("says so when dak is not on the PATH", () => {
-  const result = runInstaller({ dakOnPath: false });
+  const result = runInstaller({ dakOnPath: false }, { DAK_VERSION: "0.2.0" });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /dak is not on your PATH.*\/fake\/prefix/s);
 });
