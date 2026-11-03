@@ -24,29 +24,7 @@ in the background. `row_limit` and `DAK_MAX_ROWS` do not apply to an export. The
 
 ## Lifecycle
 
-```mermaid
-stateDiagram-v2
-  direction LR
-  [*] --> PENDING: export accepted
-  PENDING --> DOWNLOADING: Databricks finished the query
-  DOWNLOADING --> SUCCEEDED: all chunks written and renamed
-  PENDING --> FAILED: query error
-  DOWNLOADING --> FAILED: chunk error after retries
-  PENDING --> CANCELED: cancel
-  DOWNLOADING --> CANCELED: cancel
-  SUCCEEDED --> [*]
-  FAILED --> [*]
-  CANCELED --> [*]
-
-  classDef running fill:#E8F1FF,stroke:#2F6FDB,color:#1F2937
-  classDef done fill:#E6F7EE,stroke:#1E9E62,color:#1F2937
-  classDef failed fill:#FDE8E8,stroke:#C81E1E,color:#1F2937
-  classDef stopped fill:#FFF4E5,stroke:#E07B00,color:#1F2937
-  class PENDING,DOWNLOADING running
-  class SUCCEEDED done
-  class FAILED failed
-  class CANCELED stopped
-```
+![An accepted export is PENDING until Databricks finishes the query, then DOWNLOADING until every chunk is written and renamed, which ends in SUCCEEDED; a query or chunk error ends in FAILED, and a cancel ends in CANCELED](/diagrams/exports-states.svg)
 
 Follow the export with `get_statement`, using the `statement_id`. It returns the state under `export.status`:
 
