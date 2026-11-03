@@ -90,7 +90,7 @@ test("accepts the minimum Node.js version", () => {
 
 test("fails when Node.js is missing", () => {
   const result = runInstaller({ nodeVersion: null });
-  assert.equal(result.status, 1);
+  assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
   assert.match(result.stderr, /Node\.js 22\.18 or later is required, but node was not found/);
   assert.deepEqual(result.npmCalls, []);
 });
@@ -98,7 +98,7 @@ test("fails when Node.js is missing", () => {
 test("fails when Node.js is older than the minimum", () => {
   for (const nodeVersion of ["20.11.1", "22.17.9"]) {
     const result = runInstaller({ nodeVersion });
-    assert.equal(result.status, 1, nodeVersion);
+    assert.equal(result.status, 1, `${nodeVersion}: ${result.stdout}${result.stderr}`);
     assert.ok(result.stderr.includes(`Node.js 22.18 or later is required, found ${nodeVersion}.`), result.stderr);
     assert.deepEqual(result.npmCalls, []);
   }
@@ -106,20 +106,20 @@ test("fails when Node.js is older than the minimum", () => {
 
 test("fails when npm is missing", () => {
   const result = runInstaller({ npm: false });
-  assert.equal(result.status, 1);
+  assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
   assert.match(result.stderr, /npm was not found/);
 });
 
 test("fails when the latest release cannot be found", () => {
   const result = runInstaller({ latestLookupFails: true });
-  assert.equal(result.status, 1);
+  assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
   assert.match(result.stderr, /Could not find the latest release/);
   assert.deepEqual(result.npmCalls, []);
 });
 
 test("fails when npm cannot install the tarball", () => {
   const result = runInstaller({ npmInstallFails: true });
-  assert.equal(result.status, 1);
+  assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
   assert.match(result.stderr, /npm could not install .*databricks-agent-kit-0\.2\.0\.tgz/);
 });
 
