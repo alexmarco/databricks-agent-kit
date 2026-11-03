@@ -22,23 +22,7 @@ Skills are out of scope for the code: the official installer (`databricks aitool
 
 ## 2. Architecture
 
-```mermaid
-flowchart LR
-    subgraph Local machine
-        Agent[Coding agent]
-        MCP[dak mcp]
-        Log[(logs.db)]
-        Exports[(DAK_EXPORT_DIR)]
-        CLI[Databricks CLI]
-    end
-    Agent -- MCP tools/resources --> MCP
-    MCP -- batched writes --> Log
-    MCP -- result chunks --> Exports
-    MCP -- U2M token --> CLI
-    MCP -- REST APIs --> WS[(Databricks workspace)]
-    MCP -- presigned URLs, no token --> Cloud[(Cloud storage)]
-    classDef default fill:#E8F1FF,stroke:#2F6FDB,color:#1F2937
-```
+![On the local machine, the coding agent calls dak mcp through MCP tools and resources; dak mcp writes logs.db in batches, writes result chunks to DAK_EXPORT_DIR and gets the U2M token from the Databricks CLI; it calls the Databricks workspace REST APIs and downloads from cloud storage through presigned URLs without the token](./public/diagrams/design-architecture.svg)
 
 One package, one binary (`dak`):
 
@@ -340,3 +324,4 @@ Decisions and rationale: [ADR 0017](adr/0017-documentation-site-on-github-pages.
 - `.github/workflows/docs.yml` builds the VitePress site from `docs/` (`npm run docs:build`) on pull requests into `develop` and `main`.
 - A push to `main` builds the site again and deploys it to GitHub Pages through the `github-pages` environment. It does not depend on a release, so the site shows the current state of `main`.
 - `GLOSSARY.md` and the root `README.md` are not published. `docs/research/` is excluded from the build.
+- Diagrams are Excalidraw sources in `docs/diagrams-src/`, rendered by `scripts/render-diagrams.mjs` to SVG files committed in `docs/public/diagrams/`. Sequence diagrams stay in Mermaid. Decisions: [ADR 0018](adr/0018-excalidraw-diagrams-rendered-to-svg.md).

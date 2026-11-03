@@ -16,30 +16,54 @@ session.
 Data questions follow the same path. The tools are designed for it, and they replace Genie for this purpose.
 
 ```mermaid
+---
+config:
+  sequence:
+    width: 120
+    actorMargin: 40
+    noteMargin: 8
+---
 sequenceDiagram
-  autonumber
   participant A as Agent
   participant D as dak
   participant U as Unity Catalog
   participant W as SQL warehouse
 
-  A->>D: search_metadata("orders")
-  D->>U: information_schema lookup
-  U-->>D: matching tables and columns
-  D-->>A: candidates
-  A->>D: describe_table(full_name, sample_rows=5)
-  D->>U: table metadata
-  D->>W: sample query (up to sample_rows rows)
-  D-->>A: columns, keys, tags, sample
-  A->>D: execute_sql(aggregated query)
-  D->>W: read-only check, then the statement
-  W-->>D: bounded result
-  D-->>A: rows, truncated flag
+  rect rgba(122, 79, 214, 0.14)
+    Note over A,W: search_metadata
+    A->>D: search_metadata("orders")
+    D->>U: information_schema lookup
+    U-->>D: matching tables<br/>and columns
+    D-->>A: candidates
+  end
+
+  rect rgba(47, 111, 219, 0.14)
+    Note over A,W: describe_table
+    A->>D: describe_table(full_name,<br/>sample_rows=5)
+    D->>U: table metadata
+    D->>W: sample query<br/>(up to sample_rows rows)
+    D-->>A: columns, keys,<br/>tags, sample
+  end
+
+  rect rgba(30, 158, 98, 0.14)
+    Note over A,W: execute_sql
+    A->>D: execute_sql(aggregated query)
+    D->>W: read-only check,<br/>then the statement
+    W-->>D: bounded result
+    D-->>A: rows, truncated flag
+  end
+
   opt Result too large
-    A->>D: execute_sql(..., export = parquet)
-    D-->>A: statementId and export descriptor
-    A->>D: get_statement(statementId, wait_seconds = 30)
-    D-->>A: export status and files
+    rect rgba(30, 158, 98, 0.14)
+      Note over A,W: execute_sql with export
+      A->>D: execute_sql(...,<br/>export = parquet)
+      D-->>A: statementId and<br/>export descriptor
+    end
+    rect rgba(224, 123, 0, 0.14)
+      Note over A,W: get_statement
+      A->>D: get_statement(statementId,<br/>wait_seconds = 30)
+      D-->>A: export status and files
+    end
   end
 ```
 

@@ -8,31 +8,7 @@ needs.
 
 The server checks these sources in order and uses the first one that applies:
 
-```mermaid
-flowchart TD
-  start(["dak starts"]) --> flag{"--profile given?"}
-  flag -- yes --> explicit["Only that profile, environment ignored"]
-  flag -- no --> env{"Environment credentials set?"}
-  env -- yes --> envcred["Use the environment variables"]
-  env -- no --> profile["Default or named profile"]
-  explicit --> method
-  envcred --> method
-  profile --> method
-  method{"Which keys does the profile have?"}
-  method -- "token" --> pat["Personal access token"]
-  method -- "client_id + client_secret" --> m2m["OAuth machine-to-machine"]
-  method -- "auth_type = databricks-cli" --> u2m["OAuth through the Databricks CLI"]
-  method -- "any other auth_type" --> rejected(["Rejected, with the list of supported methods"])
-
-  classDef step fill:#E8F1FF,stroke:#2F6FDB,color:#1F2937
-  classDef choice fill:#FFF4E5,stroke:#E07B00,color:#1F2937
-  classDef method fill:#E6F7EE,stroke:#1E9E62,color:#1F2937
-  classDef bad fill:#FDE8E8,stroke:#C81E1E,color:#1F2937
-  class start,explicit,envcred,profile step
-  class flag,env,method choice
-  class pat,m2m,u2m method
-  class rejected bad
-```
+![How dak resolves credentials: profile flag, environment variables, then the profile file, and the profile's keys choose the method](/diagrams/authentication.svg)
 
 The host must use `https`. Plain `http` is accepted only for loopback test stubs. Tokens stay in memory, are refreshed
 before they expire, and are sent only to the workspace host. They never appear in logs or tool output.

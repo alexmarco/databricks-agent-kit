@@ -5,32 +5,7 @@ damage. This page lists what protects the data, what does not, and what you have
 
 ## Where the boundary is
 
-```mermaid
-flowchart LR
-  subgraph untrusted["Agent context: treat as untrusted"]
-    model["Model output and prompts"]
-    data["Table comments and data"]
-  end
-  subgraph guard["dak: defense in depth"]
-    check["Read-only check"]
-  end
-  subgraph boundary["Security boundary"]
-    perms["Unity Catalog privileges"]
-  end
-  db[("Data in the workspace")]
-
-  model --> check --> perms --> db
-  db --> data --> model
-
-  classDef risk fill:#FDE8E8,stroke:#C81E1E,color:#1F2937
-  classDef guardStyle fill:#FFF4E5,stroke:#E07B00,color:#1F2937
-  classDef boundaryStyle fill:#E6F7EE,stroke:#1E9E62,color:#1F2937
-  classDef dataStyle fill:#E8F1FF,stroke:#2F6FDB,color:#1F2937
-  class model,data risk
-  class check guardStyle
-  class perms boundaryStyle
-  class db dataStyle
-```
+![Model output, prompts, table comments and data are untrusted agent context; a statement passes the read-only check in dak, which is defense in depth, and then the Unity Catalog privileges, which are the security boundary, before it reaches the data; the data flows back into the agent context](/diagrams/security-trust-boundary.svg)
 
 The **Unity Catalog privileges of the identity are the security boundary.** Neither the Statement Execution API nor MCP offers
 a read-only mode, and MCP tool annotations are only hints to the client. The read-only check decides whether a statement
