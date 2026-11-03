@@ -22,7 +22,7 @@ Skills are out of scope for the code: the official installer (`databricks aitool
 
 ## 2. Architecture
 
-![On the local machine, the coding agent calls dak mcp through MCP tools and resources; dak mcp writes logs.db in batches, writes result chunks to DAK_EXPORT_DIR and gets the U2M token from the Databricks CLI; it calls the Databricks workspace REST APIs and downloads from cloud storage through presigned URLs without the token](./public/diagrams/design-architecture.svg)
+![On the local machine, the coding agent calls dak mcp through MCP tools and resources; dak mcp writes logs.db in batches, keeps cached metadata in cache.db, writes result chunks to DAK_EXPORT_DIR and gets the U2M token from the Databricks CLI; it calls the Databricks workspace REST APIs and downloads from cloud storage through presigned URLs without the token](./public/diagrams/design-architecture.svg)
 
 One package, one binary (`dak`):
 
