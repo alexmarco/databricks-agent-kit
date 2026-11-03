@@ -242,10 +242,11 @@ databricks-agent-kit/
   tsconfig.json
   biome.json              # Biome lint and format (ADR 0016)
   commitlint.config.mjs   # commit message rules (ADR 0016)
-  cliff.toml              # git-cliff: next version and release notes (ADR 0016)
-  .github/                # workflows (ci, codeql, integration, release), CODEOWNERS, Dependabot
+  release-please-config.json, .release-please-manifest.json  # Release Please: next version and release notes (ADR 0022)
+  .github/                # workflows (ci, codeql, integration, release, sync), CODEOWNERS, Dependabot
   .husky/                 # local git hooks: pre-commit, commit-msg
-  scripts/ci/             # branch policy of pull requests (ADR 0016)
+  scripts/ci/             # branch policy of pull requests (ADR 0016) and the back-merge into develop (ADR 0022)
+  scripts/install.sh      # installs a release tarball with npm, attached to every release (ADR 0022)
   src/
     cli.ts                # argument parsing, transport choice, signals, 401 rate limiter, command dispatch
     workspace-session.ts  # workspace session: lazy credentials, construction of the Databricks modules, closing (ADR 0014)
@@ -303,8 +304,10 @@ Decisions and rationale: [ADR 0016](adr/0016-ci-cd-pipeline-and-gitflow.md).
 | `feature/*`, `bugfix/*` | `develop`    | `develop`                               | Changes; `bugfix/*` for non-critical fixes |
 | `develop`               | `main`       | `main`                                  | The next release                           |
 | `hotfix/*`              | `main`       | `main`, then back-merged into `develop` | Critical fix in production                 |
+| `release-please--*`     | `main`       | `main`                                  | Release pull request, created by the bot   |
+| `sync/*`                | `develop`    | `develop`                               | Back-merge of `main`, created by the bot   |
 
-Neither `main` nor `develop` accepts direct pushes. `scripts/ci/branch-policy.sh` rejects a pull request whose branch does not match its target. Each pull request is merged with a merge commit, so the atomic commits of a branch stay in the history. It needs one approval from a code owner (the maintainer), resolved conversations and a branch up to date with its base. The maintainer is the only bypass actor, for pull requests only.
+Neither `main` nor `develop` accepts direct pushes. `scripts/ci/branch-policy.sh` rejects a pull request whose branch does not match its target. Pull requests into `develop` are squash-merged: the title of the pull request, a Conventional Commit, is the commit and the line in the release notes, and the atomic commits stay in the branch. Pull requests into `main` are merged with a merge commit and never squashed, because squashing the promotion would hide its `feat` and `fix` commits from Release Please. Each pull request needs one approval from a code owner (the maintainer) and resolved conversations; `develop` also requires a branch up to date with its base, `main` does not (ADR 0022). The maintainer is the only bypass actor, for pull requests only.
 
 ### 10.2 CI gates
 
@@ -314,9 +317,9 @@ Required checks of pull requests into `develop` and `main`:
 
 | Check               | What it verifies                                                                                                                        |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `quality`           | Lint, format, type check, build and `npm audit` of the runtime dependencies at high severity or above                                   |
+| `quality`           | Lint, format, shellcheck of the install script, type check, build and `npm audit` of the runtime dependencies at high severity or above |
 | `test (…)`          | `npm run test:coverage` on Ubuntu (Node.js 22.18 and 24) and Windows (Node.js 24); thresholds 95% lines, 85% branches and 90% functions |
-| `commits`           | commitlint over the commits of the pull request; GitHub merge commits are skipped                                                       |
+| `commits`           | commitlint over the commits and the title of the pull request; GitHub merge commits are skipped                                         |
 | `branch-policy`     | The source and target branches follow the flow above                                                                                    |
 | `dependency-review` | Dependency changes of the pull request                                                                                                  |
 | CodeQL analysis     | Static security analysis of JavaScript and TypeScript on pull requests and weekly on `main`                                             |
@@ -329,13 +332,18 @@ Dependabot proposes npm and GitHub Actions updates weekly, grouped, into `develo
 
 ### 10.4 Release process
 
-A push to `main` (a merged `develop` or `hotfix/*`) runs `.github/workflows/release.yml`:
+A push to `main` (a merged `develop` or `hotfix/*`) runs `.github/workflows/release.yml` and `.github/workflows/sync.yml` ([ADR 0022](adr/0022-releases-with-release-please.md)):
 
-1. git-cliff computes the next version and the release notes from the Conventional Commits since the last tag. Only `feat`, `fix` and `perf` commits are releasable.
-2. Without releasable commits, nothing is published.
-3. Otherwise the tarball is packed with that version (the version is not committed), the `vX.Y.Z` tag is created and a GitHub Release is published with the notes and the tarball.
+1. Release Please reads the Conventional Commits since the last tag. Only `feat`, `fix` and `perf` commits (and breaking changes) are releasable. Without them nothing happens.
+2. Otherwise it opens or updates the pull request `release-please--branches--main`. That pull request bumps `version` in `package.json` and `package-lock.json` and shows the release notes.
+3. The maintainer merges that pull request. Release Please creates the `vX.Y.Z` tag and the GitHub Release with the notes, and the `assets` job attaches the tarball and `scripts/install.sh`.
+4. `sync.yml` opens the pull request `sync/main-into-develop` into `develop` when `main` has content that `develop` lacks (the version bump, a hotfix). It is squash-merged. A conflict fails the workflow.
 
-GitHub Releases is the changelog: the repository has no changelog file and no manual version bump. The package stays private and is not published to npm.
+A release therefore takes three pull requests, merged by the maintainer in the web UI with the bypass: the promotion `develop` into `main`, the release pull request and the sync pull request. The bot opens the last two with the `RELEASE_PLEASE_TOKEN` secret, a personal access token that expires after a year, so that the checks run on them.
+
+GitHub Releases is the changelog: the repository has no changelog file (`skip-changelog`). The version is committed by the release pull request, so a clone, the tarball and the tag report the same version. The package stays private and is not published to npm.
+
+`scripts/install.sh` installs the tarball of the latest release (or of `DAK_VERSION`) with `npm install --global`. It is attached to every release, so `https://github.com/alexmarco/databricks-agent-kit/releases/latest/download/install.sh` serves the script of the latest release.
 
 ### 10.5 Documentation site
 

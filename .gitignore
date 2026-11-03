@@ -12,6 +12,7 @@ dist/
 !.eslintignore
 !.markdownlint*
 !.nvmrc
+!.release-please-manifest.json
 !.npmrc
 !.github/
 !.husky/

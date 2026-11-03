@@ -1,6 +1,6 @@
 # ADR 0016: CI/CD pipeline, simplified GitFlow and automated releases
 
-- Status: Accepted
+- Status: Accepted. The release workflow, the version handling and the merge methods are superseded by [ADR 0022](0022-releases-with-release-please.md).
 - Date: 2026-10-20
 
 ## Context
