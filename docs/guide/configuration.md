@@ -36,7 +36,9 @@ credential variables are `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `DATABRICKS_CLIE
   second description of the same table, or a second listing of the same level, makes no request to Databricks, in this session or in a later one. `DAK_CACHE_TTL` is the
   number of seconds an entry stays fresh, counted from the moment it was loaded; a new value applies at once to the entries
   already stored. `0` disables the cache: no `cache.db` is opened and answers carry no `cache` field. A negative or
-  non-numeric value is rejected at startup. Each credential has its own entries, so two identities never share one.
+  non-numeric value is rejected at startup. Each credential has its own entries, so two identities never share one. Entries not used for 30 days are deleted when
+  the server starts and every 24 hours while it runs. `dak doctor` checks that `cache.db` opens and is writable, and reports
+  its schema version and the effective TTL, or that the cache is disabled.
 - **Log level.** `DAK_LOG_LEVEL` filters the stored log entries. The levels are `trace`, `debug`, `info`, `warn`, `error` and
   `fatal`.
 - **Export directory.** `dak doctor` creates it if needed and checks that it is writable.

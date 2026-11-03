@@ -144,8 +144,9 @@ dak doctor --profile dev
 ```
 
 It checks authentication, identity, warehouse, `SELECT 1`, `information_schema` (used by `search_metadata`), result
-download, export directory, log storage, the Databricks CLI version and the write mode, and prints the next step for
-anything that fails. Exit code 1 means at least one required check failed.
+download, export directory, log storage, the metadata cache (it opens and is writable, its schema version and TTL), the
+Databricks CLI version and the write mode, and prints the next step for anything that fails. Exit code 1 means at least
+one required check failed.
 
 - **Result download** submits `SELECT 1` as a CSV export and downloads its first chunk from the presigned link without
   credentials, exactly as an export does. It waits up to 60 s for a stopped warehouse to start. It only warns (it never

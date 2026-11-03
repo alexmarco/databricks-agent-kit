@@ -156,6 +156,7 @@ function deps(
     connect: async () => connection(client(failing), statements),
     runCli: async () => "Databricks CLI v1.21.0\n",
     openRepository: async () => ({ close: () => undefined }),
+    checkCache: async () => ({ schemaVersion: 1 }),
     fetch: async (url, init) => {
       recorder.fetchCalls.push({ url, init });
       return new Response("chunk", { status: 200 });
@@ -181,6 +182,7 @@ test("all checks pass on a healthy workspace", async () => {
       ["Result download", "ok"],
       ["Export directory", "ok"],
       ["Log storage", "ok"],
+      ["Metadata cache", "ok"],
       ["Databricks CLI", "ok"],
       ["Write mode", "ok"],
     ],
@@ -396,6 +398,55 @@ test("optional features degrade to warnings, required ones fail", async () => {
   assert.match(byName(checks, "information_schema")!.next ?? "", /search_metadata/);
   assert.doesNotMatch(byName(checks, "information_schema")!.next ?? "", /describe_table|tags/);
   assert.equal(byName(checks, "Lineage system tables"), undefined);
+});
+
+test("the cache check reports the file, its schema version and the effective TTL", async () => {
+  const paths: string[] = [];
+  const checks = await runDoctor(
+    deps({
+      checkCache: async (path) => {
+        paths.push(path);
+        return { schemaVersion: 1 };
+      },
+    }),
+  );
+  assert.deepEqual(paths, [join(settings.storageDir, "cache.db")]);
+  const cache = byName(checks, "Metadata cache")!;
+  assert.equal(cache.status, "ok");
+  assert.match(cache.detail, /cache\.db/);
+  assert.match(cache.detail, /schema version 1/);
+  assert.match(cache.detail, /TTL 86400 s/);
+});
+
+test("a cache that cannot be opened or written is a failed check with a next step", async () => {
+  const checks = await runDoctor(
+    deps({
+      checkCache: async () => {
+        throw new Error("file is not a database");
+      },
+    }),
+  );
+  const cache = byName(checks, "Metadata cache")!;
+  assert.equal(cache.status, "fail");
+  assert.match(cache.detail, /file is not a database/);
+  assert.match(cache.next ?? "", /DAK_STORAGE_DIR|delete/i);
+});
+
+test("the cache check says when the cache is disabled and opens nothing", async () => {
+  let opened = false;
+  const checks = await runDoctor(
+    deps({
+      settings: { ...settings, cacheTtlSeconds: 0 },
+      checkCache: async () => {
+        opened = true;
+        return { schemaVersion: 1 };
+      },
+    }),
+  );
+  const cache = byName(checks, "Metadata cache")!;
+  assert.equal(cache.status, "ok");
+  assert.match(cache.detail, /disabled.*DAK_CACHE_TTL=0/);
+  assert.equal(opened, false);
 });
 
 test("old or missing CLI, broken storage and write mode are reported", async () => {

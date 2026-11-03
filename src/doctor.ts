@@ -41,6 +41,8 @@ export interface DoctorDependencies {
   connect(): Promise<DoctorConnection>;
   runCli(args: string[]): Promise<string>;
   openRepository(path: string): Promise<{ close(): void }>;
+  /** Opens `cache.db` to prove it is writable and returns its schema version; rejects when it is not usable. */
+  checkCache(path: string): Promise<{ schemaVersion: number }>;
   /** Plain `fetch`, used to download an export link exactly as the export manager does. */
   fetch: FetchLike;
   /** Creates the directory if needed, then writes and deletes a temporary file in it; throws when it is not writable. */
@@ -236,9 +238,31 @@ async function cliCheck(deps: DoctorDependencies): Promise<DoctorCheck> {
   }
 }
 
+async function cacheCheck(deps: DoctorDependencies): Promise<DoctorCheck> {
+  const name = "Metadata cache";
+  const { cacheTtlSeconds, storageDir } = deps.settings;
+  if (cacheTtlSeconds === 0) return { name, status: "ok", detail: "disabled (DAK_CACHE_TTL=0)" };
+  const path = join(storageDir, "cache.db");
+  try {
+    const { schemaVersion } = await deps.checkCache(path);
+    return {
+      name,
+      status: "ok",
+      detail: `${path}, schema version ${schemaVersion}${schemaVersion === 0 ? " (new file)" : ""}, TTL ${cacheTtlSeconds} s`,
+    };
+  } catch (error) {
+    return {
+      name,
+      status: "fail",
+      detail: `${path}: ${messageOf(error)}`,
+      next: "Delete cache.db (it is rebuilt on use) or set DAK_STORAGE_DIR to a writable directory.",
+    };
+  }
+}
+
 /**
  * Checks authentication, identity, warehouse, SQL execution, information_schema, result download,
- * export directory, log storage, the Databricks CLI and the write mode. Remote checks are skipped when an earlier one makes them meaningless.
+ * export directory, log storage, the metadata cache, the Databricks CLI and the write mode. Remote checks are skipped when an earlier one makes them meaningless.
  */
 export async function runDoctor(deps: DoctorDependencies): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = [];
@@ -292,6 +316,7 @@ export async function runDoctor(deps: DoctorDependencies): Promise<DoctorCheck[]
     });
   }
 
+  checks.push(await cacheCheck(deps));
   checks.push(await cliCheck(deps));
   checks.push(
     deps.settings.allowWrites

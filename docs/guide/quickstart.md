@@ -47,8 +47,8 @@ dak doctor --profile dev
 ```
 
 `dak doctor` checks authentication, identity, warehouse, a `SELECT 1`, `information_schema` (used by `search_metadata`),
-result download, the export directory, log storage, the Databricks CLI version and the write mode. It prints the next step
-for anything that fails. Exit code `1` means at least one required check failed.
+result download, the export directory, log storage, the metadata cache, the Databricks CLI version and the write mode. It
+prints the next step for anything that fails. Exit code `1` means at least one required check failed.
 
 ## 4. Register the server in your agent
 

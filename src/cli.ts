@@ -15,6 +15,7 @@ import { startHttpServer } from "./http.ts";
 import { openLogRepository } from "./logging/repository.ts";
 import { createRateLimitedLogger } from "./logging/rate-limit.ts";
 import { createLogService } from "./logging/service.ts";
+import { checkMetadataCache } from "./metadata-cache.ts";
 import { createMcpServer } from "./server.ts";
 import { connectWorkspace, createWorkspaceSession, type WorkspaceAdapters } from "./workspace-session.ts";
 
@@ -130,6 +131,7 @@ async function runDoctorCommand(settings: Settings): Promise<number> {
       connectWorkspace(workspaceAdapters(settings), { warehouseId: settings.warehouseId, limits: DOCTOR_LIMITS }),
     runCli: (args) => defaultAuthDependencies(process.env).runCli(args),
     openRepository: openLogRepository,
+    checkCache: checkMetadataCache,
     fetch: clientDependencies.fetch,
     ensureExportDir: ensureWritableDirectory,
   });

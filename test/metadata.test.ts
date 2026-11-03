@@ -2,9 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { createMetadataService } from "../src/metadata.ts";
-import { openMetadataCache, type MetadataCache } from "../src/metadata-cache.ts";
+import { checkMetadataCache, openMetadataCache, type MetadataCache } from "../src/metadata-cache.ts";
 import { loadDatabaseSync } from "../src/sqlite.ts";
 import type { DatabricksClient, QueryValue } from "../src/client.ts";
 import { InvalidArgumentError } from "../src/errors.ts";
@@ -864,5 +865,93 @@ test("bypassed answers are not counted in the statistics", async () => {
     assert.equal((await metadata.describeTable("main.s.t")).cache?.status, "bypassed");
     const { total } = cache.stats();
     assert.deepEqual([total.misses, total.expirations, total.hits, total.refreshes], [1, 0, 0, 0]);
+  });
+});
+
+const DAY = 86_400_000;
+
+test("the purge deletes entries unused for more than 30 days, of every identity, and keeps the rest", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  await withCache(async ({ open, clock }) => {
+    const { client } = fakeClient({ ...listingRoutes(), ...cachedTableRoute() });
+    const mine = await open({ identity: "identity-a", ttlSeconds: 90 * 86_400 });
+    const other = await open({ identity: "identity-b", ttlSeconds: 90 * 86_400 });
+    await createMetadataService(client, noStatements, mine).describeTable("main.s.t");
+    await createMetadataService(client, noStatements, mine).listObjects({});
+    await createMetadataService(client, noStatements, other).describeTable("main.s.t");
+    clock.now += 20 * DAY;
+    assert.equal((await createMetadataService(client, noStatements, mine).listObjects({})).cache?.status, "hit");
+    clock.now += 11 * DAY; // table: 31 days unused; catalogs: 11 days since its last use
+    const reopened = await open({ identity: "identity-a", ttlSeconds: 90 * 86_400 });
+    assert.equal(reopened.entry("table", "main.s.t"), undefined, "unused for 31 days");
+    assert.equal(other.entry("table", "main.s.t"), undefined, "the purge is not limited to one identity");
+    assert.notEqual(reopened.entry("listing", ""), undefined, "a read renewed its last use");
+  });
+});
+
+test("an entry unused for exactly 30 days is kept", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  await withCache(async ({ open, clock }) => {
+    const first = await open({ ttlSeconds: 90 * 86_400 });
+    await createMetadataService(fakeClient(cachedTableRoute()).client, noStatements, first).describeTable("main.s.t");
+    clock.now += 30 * DAY;
+    assert.notEqual((await open()).entry("table", "main.s.t"), undefined);
+    clock.now += 1;
+    assert.equal((await open()).entry("table", "main.s.t"), undefined);
+  });
+});
+
+test("the purge also runs every 24 hours, and closing the cache stops the timer", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  await withCache(async ({ open, clock, warnings }) => {
+    const cache = await open({ ttlSeconds: 90 * 86_400 });
+    await createMetadataService(fakeClient(cachedTableRoute()).client, noStatements, cache).describeTable("main.s.t");
+    clock.now += 31 * DAY;
+    t.mock.timers.tick(DAY);
+    assert.equal(cache.entry("table", "main.s.t"), undefined, "the timer purged it");
+    cache.close();
+    t.mock.timers.tick(3 * DAY);
+    assert.deepEqual(warnings, [], "no purge runs after close");
+  });
+});
+
+test("a purge that fails is a warning and the timer keeps running", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  await withCache(async ({ open, path, warnings }) => {
+    await open();
+    await breakCacheFile(path);
+    t.mock.timers.tick(DAY);
+    t.mock.timers.tick(DAY);
+    assert.equal(warnings.length, 2);
+    assert.match(warnings[0] ?? "", /purge/i);
+  });
+});
+
+test("the purge timer does not keep the process alive", () => {
+  const script = `
+    const { openMetadataCache } = await import(${JSON.stringify(new URL("../src/metadata-cache.ts", import.meta.url).href)});
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    await openMetadataCache({ path: join(mkdtempSync(join(tmpdir(), "dak-unref-")), "cache.db"), identity: "x", ttlSeconds: 60 });
+    console.log("opened");
+  `;
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+    encoding: "utf8",
+    timeout: 15_000,
+  });
+  assert.equal(child.status, 0, `the process exits by itself: ${child.stderr}`);
+  assert.match(child.stdout, /opened/);
+});
+
+test("checkMetadataCache reports the schema version of a healthy file and rejects one that is not a database", async () => {
+  await withCache(async ({ open, path }) => {
+    assert.deepEqual(await checkMetadataCache(path), { schemaVersion: 0 }, "a file that does not exist yet is empty");
+    await open();
+    assert.deepEqual(await checkMetadataCache(path), { schemaVersion: 1 });
+  });
+  await withCache(async ({ path }) => {
+    await writeFile(path, "this is not a SQLite database".repeat(100));
+    await assert.rejects(checkMetadataCache(path), /not a database/);
   });
 });

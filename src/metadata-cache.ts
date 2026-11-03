@@ -117,6 +117,10 @@ PRAGMA user_version = ${SCHEMA_VERSION};
 type Row = Record<string, unknown>;
 
 const FILE_SUFFIXES = ["", "-wal", "-shm"];
+const DAY_MS = 86_400_000;
+/** Entries not used for this long are deleted. */
+const RETENTION_MS = 30 * DAY_MS;
+const PURGE_INTERVAL_MS = DAY_MS;
 
 const emptyCounters = (): CacheCounters => ({
   entries: 0,
@@ -158,7 +162,8 @@ async function openDatabase(path: string) {
 /**
  * Opens (creating it if needed) the cache database, in WAL mode and readable only by its owner outside Windows. A file
  * that cannot be used, such as a corrupt one or one of another schema version, is deleted and created again once; if the
- * cache still cannot be opened, every lookup answers from Databricks as `bypassed`.
+ * cache still cannot be opened, every lookup answers from Databricks as `bypassed`. Entries unused for 30 days are
+ * purged when the cache opens and every 24 hours by a timer that does not keep the process alive.
  */
 export async function openMetadataCache(options: MetadataCacheOptions): Promise<MetadataCache> {
   const { identity } = options;
@@ -218,6 +223,18 @@ export async function openMetadataCache(options: MetadataCacheOptions): Promise<
        SUM(hits * last_load_ms) AS time_saved_ms, MIN(first_loaded_at) AS oldest
      FROM cache_entries WHERE identity = ? GROUP BY kind`,
   );
+
+  const deleteUnused = db.prepare("DELETE FROM cache_entries WHERE last_used_at < ?");
+  const purge = () => {
+    try {
+      deleteUnused.run(now() - RETENTION_MS);
+    } catch (error) {
+      warn("Metadata cache purge failed", undefined, error);
+    }
+  };
+  purge();
+  const purgeTimer = setInterval(purge, PURGE_INTERVAL_MS);
+  purgeTimer.unref();
 
   return {
     async lookup<T>(
@@ -323,8 +340,27 @@ export async function openMetadataCache(options: MetadataCacheOptions): Promise<
       };
     },
     close: () => {
-      if (!closed) db.close();
+      if (closed) return;
       closed = true;
+      clearInterval(purgeTimer);
+      db.close();
     },
   };
+}
+
+/**
+ * Checks that `cache.db` opens and can be written, without changing it, and returns its schema version (0 for a file
+ * that is new). Used by `dak doctor`; it throws the error that SQLite reports when the file is not usable.
+ */
+export async function checkMetadataCache(path: string): Promise<{ schemaVersion: number }> {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const Database = await loadDatabaseSync();
+  const db = new Database(path);
+  try {
+    // BEGIN IMMEDIATE takes the write lock, so a read-only or locked file fails here.
+    db.exec("PRAGMA busy_timeout=5000; BEGIN IMMEDIATE; ROLLBACK;");
+    return { schemaVersion: Number((db.prepare("PRAGMA user_version").get() as Row).user_version) };
+  } finally {
+    db.close();
+  }
 }
