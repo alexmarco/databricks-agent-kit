@@ -53,22 +53,7 @@ query. The server talks only to public Databricks REST APIs.
 
 ## How it fits together
 
-```mermaid
-flowchart LR
-  agent["Coding agent"]
-  dak["dak MCP server"]
-  dbx["Databricks workspace"]
-
-  agent -- "MCP over stdio or Streamable HTTP" --> dak
-  dak -- "REST: Statement Execution, Unity Catalog" --> dbx
-
-  classDef agentStyle fill:#F1EBFF,stroke:#7A4FD6,color:#1F2937
-  classDef serverStyle fill:#E8F1FF,stroke:#2F6FDB,color:#1F2937
-  classDef workspaceStyle fill:#E6F7EE,stroke:#1E9E62,color:#1F2937
-  class agent agentStyle
-  class dak serverStyle
-  class dbx workspaceStyle
-```
+![A coding agent talks MCP over stdio or Streamable HTTP to dak, and dak calls the Statement Execution and Unity Catalog REST APIs of the Databricks workspace](/diagrams/components.svg)
 
 ## Where to go next
 
