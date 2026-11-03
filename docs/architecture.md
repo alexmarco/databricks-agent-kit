@@ -27,27 +27,44 @@ An export is the longest path through the server, because the rows go from Datab
 agent.
 
 ```mermaid
+---
+config:
+  sequence:
+    width: 120
+    actorMargin: 40
+    noteMargin: 8
+---
 sequenceDiagram
-  autonumber
   participant A as Agent
   participant D as dak
   participant W as Databricks API
   participant S as Cloud storage
   participant F as Export directory
 
-  A->>D: execute_sql(statement, export)
-  D->>D: read-only check
-  D->>W: submit statement (EXTERNAL_LINKS)
-  D-->>A: statementId and descriptor (returns at once)
-  loop until the result is complete
-    D->>W: request the next chunk link
-    W-->>D: presigned URL
-    D->>S: GET the chunk (no Authorization header)
-    S-->>D: chunk bytes
-    D->>F: write <id>.part, rename when complete
+  rect rgba(30, 158, 98, 0.14)
+    Note over A,F: execute_sql with export
+    A->>D: execute_sql(<br/>statement, export)
+    D->>D: read-only check
+    D->>W: submit statement<br/>(EXTERNAL_LINKS)
+    D-->>A: statementId and<br/>descriptor<br/>(returns at once)
   end
-  A->>D: get_statement(statementId, wait_seconds)
-  D-->>A: export.status = SUCCEEDED, files, rows, bytes
+
+  rect rgba(47, 111, 219, 0.14)
+    Note over D,F: download in the background
+    loop until the result is complete
+      D->>W: request the next<br/>chunk link
+      W-->>D: presigned URL
+      D->>S: GET the chunk<br/>(no Authorization header)
+      S-->>D: chunk bytes
+      D->>F: write <id>.part,<br/>rename when complete
+    end
+  end
+
+  rect rgba(224, 123, 0, 0.14)
+    Note over A,F: get_statement
+    A->>D: get_statement(<br/>statementId,<br/>wait_seconds)
+    D-->>A: export.status =<br/>SUCCEEDED,<br/>files, rows, bytes
+  end
 ```
 
 ## Design principles
