@@ -8,43 +8,7 @@ configure, and it keeps its logs and exports on local disk.
 
 ## Components
 
-```mermaid
-flowchart TB
-  agent(["Coding agent"]) -- "MCP over stdio or HTTP" --> surface
-
-  subgraph dak["dak process"]
-    direction TB
-    surface["MCP surface"]
-    lifecycle["Statement lifecycle"]
-    metadata["Metadata and warehouses"]
-    logs["Log store"]
-    exports["Export manager"]
-  end
-
-  logdb[("logs.db")]
-  files[("Export directory")]
-  api["Databricks REST APIs"]
-  storage[("Cloud storage")]
-
-  surface --> lifecycle & metadata & logs
-  lifecycle --> exports
-  lifecycle -- "REST, with token" --> api
-  metadata -- "REST, with token" --> api
-  logs --> logdb
-  exports --> files
-  exports -. "download, no token" .-> storage
-
-  classDef agentStyle fill:#F1EBFF,stroke:#7A4FD6,stroke-width:2px,color:#1F2937
-  classDef serverStyle fill:#E8F1FF,stroke:#2F6FDB,stroke-width:2px,color:#1F2937
-  classDef storeStyle fill:#FFFFFF,stroke:#6B7280,stroke-width:2px,color:#1F2937
-  classDef remoteStyle fill:#E6F7EE,stroke:#1E9E62,stroke-width:2px,color:#1F2937
-  classDef cloudStyle fill:#FFF4E5,stroke:#E07B00,stroke-width:2px,color:#1F2937
-  class agent agentStyle
-  class surface,lifecycle,metadata,logs,exports serverStyle
-  class logdb,files storeStyle
-  class api remoteStyle
-  class storage cloudStyle
-```
+![Inside the dak process, the MCP surface feeds the statement lifecycle, the metadata queries and the log store; the lifecycle and the metadata queries call the Databricks REST APIs with the token, the export manager downloads chunks from cloud storage without it and writes the export directory, and the log store writes logs.db](/diagrams/architecture-components.svg)
 
 | Component | Responsibility |
 | --- | --- |
