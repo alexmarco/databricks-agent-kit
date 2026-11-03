@@ -156,17 +156,9 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
   );
   tool(
     "describe_table",
-    "Columns, keys and tags of catalog.schema.table; optional sample and lineage. Sample or lineage problems are reported in notes.",
-    z.object({
-      full_name: z.string(),
-      sample_rows: z.number().int().min(1).max(100).optional(),
-      lineage: z.boolean().optional(),
-    }),
-    async (args) =>
-      (await workspace()).metadata.describeTable(args.full_name, {
-        sampleRows: args.sample_rows,
-        lineage: args.lineage,
-      }),
+    "Columns, comments, keys, clustering, partitioning, owner and audit times of catalog.schema.table. Starts no warehouse.",
+    z.object({ full_name: z.string() }),
+    async (args) => (await workspace()).metadata.describeTable(args.full_name),
   );
   tool(
     "search_metadata",

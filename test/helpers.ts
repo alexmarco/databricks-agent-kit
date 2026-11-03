@@ -28,6 +28,7 @@ export function fakeServices(logs: LogService) {
   const sqlRequests: ExecuteSqlRequest[] = [];
   const getStatementCalls: Array<{ statementId: string; options: unknown }> = [];
   const cancelledStatements: string[] = [];
+  const describeCalls: unknown[][] = [];
   const statements = {
     submit: async (request: ExecuteSqlRequest) => {
       sqlRequests.push(request);
@@ -61,12 +62,10 @@ export function fakeServices(logs: LogService) {
         };
       return { level: "tables", items: [{ name: "orders", type: "MANAGED", comment: "Orders" }], truncated: false };
     },
-    describeTable: async (fullName: string, options: { sampleRows?: number; lineage?: boolean } = {}) => ({
-      fullName,
-      columns: [{ name: "id", type: "bigint", nullable: false, comment: undefined }],
-      ...(options.sampleRows === undefined ? {} : { sample: okResult }),
-      ...(options.lineage === true ? { lineage: { upstream: [], downstream: [] } } : {}),
-    }),
+    describeTable: async (...args: unknown[]) => {
+      describeCalls.push(args);
+      return { fullName: args[0], columns: [{ name: "id", type: "bigint", nullable: false, comment: undefined }] };
+    },
     searchMetadata: async () => [
       { kind: "table", catalog: "main", schema: "sales", table: "orders", column: null, comment: null },
     ],
@@ -118,6 +117,7 @@ export function fakeServices(logs: LogService) {
     sqlRequests,
     getStatementCalls,
     cancelledStatements,
+    describeCalls,
     exportCalls,
   };
 }

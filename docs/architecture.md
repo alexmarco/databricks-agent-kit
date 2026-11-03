@@ -10,16 +10,16 @@ configure, and it keeps its logs and exports on local disk.
 
 ![Inside the dak process, the MCP surface feeds the statement lifecycle, the metadata queries and the log store; the lifecycle and the metadata queries call the Databricks REST APIs with the token, the export manager downloads chunks from cloud storage without it and writes the export directory, and the log store writes logs.db](/diagrams/architecture-components.svg)
 
-| Component           | Responsibility                                                                                                |
-| ------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Transport           | Carries MCP over stdio, or over Streamable HTTP with loopback and token protections                           |
-| MCP surface         | The five tools and five resources. Every tool call is recorded as an execution                                |
-| Statement lifecycle | Builds each statement, applies the read-only check, submits it, waits, cancels and shapes the bounded result  |
-| Export manager      | Submits an export, downloads its chunks from the presigned links and writes the files                         |
-| Metadata queries    | Catalogs, schemas, tables, columns, tags, samples and lineage, through `information_schema` and Unity Catalog |
-| Warehouse selection | Chooses the warehouse: explicit, configured, or the remembered automatic choice                               |
-| Authentication      | Resolves the credentials and keeps the token fresh; tokens never leave memory                                 |
-| Log store           | Queues log events and writes them to SQLite in batches                                                        |
+| Component           | Responsibility                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Transport           | Carries MCP over stdio, or over Streamable HTTP with loopback and token protections                          |
+| MCP surface         | The five tools and five resources. Every tool call is recorded as an execution                               |
+| Statement lifecycle | Builds each statement, applies the read-only check, submits it, waits, cancels and shapes the bounded result |
+| Export manager      | Submits an export, downloads its chunks from the presigned links and writes the files                        |
+| Metadata queries    | Catalogs, schemas, tables and columns through the Unity Catalog API, and search through `information_schema` |
+| Warehouse selection | Chooses the warehouse: explicit, configured, or the remembered automatic choice                              |
+| Authentication      | Resolves the credentials and keeps the token fresh; tokens never leave memory                                |
+| Log store           | Queues log events and writes them to SQLite in batches                                                       |
 
 ## Sequence of an export
 

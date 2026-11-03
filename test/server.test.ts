@@ -234,16 +234,30 @@ test("metadata tools delegate to the metadata service", async () => {
       JSON.parse(text(await connection.client.callTool({ name, arguments: args })));
     assert.equal((await call("list_objects", {})).level, "catalogs");
     assert.deepEqual((await call("list_objects", { catalog: "main" })).items, [{ name: "main-schema" }]);
-    const described = await call("describe_table", { full_name: "main.s.t", sample_rows: 5, lineage: true });
+    const described = await call("describe_table", { full_name: "main.s.t" });
     assert.equal(described.fullName, "main.s.t");
-    assert.deepEqual(described.sample.rows, [["1"]]);
-    assert.deepEqual(described.lineage, { upstream: [], downstream: [] });
     assert.equal((await call("search_metadata", { query: "orders" }))[0].table, "orders");
-    const tooMany = await connection.client.callTool({
+    await closeAll(connection);
+  });
+});
+
+test("describe_table no longer accepts sample_rows or lineage and only passes the table name on", async () => {
+  await withLogs("stdio", async (context) => {
+    const connection = await connect(context);
+    const result = await connection.client.callTool({
       name: "describe_table",
-      arguments: { full_name: "main.s.t", sample_rows: 101 },
+      arguments: { full_name: "main.s.t", sample_rows: 5, lineage: true },
     });
-    assert.equal(tooMany.isError, true);
+    assert.equal(result.isError, undefined);
+    const described = JSON.parse(text(result));
+    assert.equal(described.sample, undefined);
+    assert.equal(described.lineage, undefined);
+    assert.deepEqual(connection.services.describeCalls, [["main.s.t"]]);
+    const { tools } = await connection.client.listTools();
+    const describeTool = tools.find((tool) => tool.name === "describe_table");
+    assert.deepEqual(Object.keys(describeTool?.inputSchema.properties ?? {}), ["full_name"]);
+    assert.doesNotMatch(describeTool?.description ?? "", /tag|sample|lineage/i);
+    assert.doesNotMatch(connection.client.getInstructions() ?? "", /tag|sample|lineage/i);
     await closeAll(connection);
   });
 });

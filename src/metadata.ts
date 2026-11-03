@@ -1,16 +1,12 @@
 import type { DatabricksClient, QueryValue } from "./client.ts";
-import { InvalidArgumentError, UnsupportedError } from "./errors.ts";
-import { SqlError, type StatementLifecycle, type StatementResult } from "./statements.ts";
+import { InvalidArgumentError } from "./errors.ts";
+import type { StatementLifecycle, StatementResult } from "./statements.ts";
 
 const MAX_PAGES = 50;
-const DEFAULT_SAMPLE_ROWS = 10;
-const MAX_SAMPLE_ROWS = 100;
 const DEFAULT_SEARCH_LIMIT = 50;
 const MAX_SEARCH_LIMIT = 200;
-const LINEAGE_LIMIT = 50;
 const DEFAULT_LIST_LIMIT = 100;
 const MAX_LIST_LIMIT = 500;
-const LINEAGE_UNAVAILABLE = /TABLE_OR_VIEW_NOT_FOUND|SCHEMA_NOT_FOUND|PERMISSION_DENIED|INSUFFICIENT_PERMISSIONS/;
 
 /** Catalog or schema with its comment. */
 export interface NamedItem {
@@ -23,16 +19,15 @@ export interface TableSummary extends NamedItem {
   type: string | undefined;
 }
 
-/** Column of a described table, with its Unity Catalog tags when readable. */
+/** Column of a described table. */
 export interface ColumnDescription {
   name: string;
   type: string;
   nullable: boolean | undefined;
   comment: string | undefined;
-  tags?: Record<string, string>;
 }
 
-/** What an agent needs to write SQL against a table; `notes` explains parts that could not be read. */
+/** What an agent needs to write SQL against a table, read from the Unity Catalog API; times are ISO 8601. */
 export interface TableDescription {
   fullName: string;
   type?: string;
@@ -44,7 +39,10 @@ export interface TableDescription {
   foreignKeys?: Array<{ columns: string[]; references: string; referencedColumns: string[] }>;
   clusteringColumns?: string[];
   partitionColumns?: string[];
-  tags?: Record<string, string>;
+  createdAt?: string;
+  createdBy?: string;
+  updatedAt?: string;
+  updatedBy?: string;
   notes?: string[];
 }
 
@@ -57,18 +55,6 @@ export interface SearchResult {
   column: string | null;
   comment: string | null;
 }
-
-/** Related table in the lineage system tables and when the relation was last seen. */
-export interface LineageEdge {
-  table: string | null;
-  lastSeen: string | null;
-}
-
-/** Result of {@link MetadataService.describeTable}: the description plus the optional sample and lineage. */
-export type DescribeTableResult = TableDescription & {
-  sample?: StatementResult;
-  lineage?: { upstream: LineageEdge[]; downstream: LineageEdge[] };
-};
 
 /** Objects found at one level of the Unity Catalog hierarchy; `truncated` is true when more matched than were returned. */
 export interface ObjectListing {
@@ -90,6 +76,10 @@ interface ApiTable {
     foreign_key_constraint?: { child_columns: string[]; parent_table: string; parent_columns: string[] };
   }>;
   properties?: Record<string, string>;
+  created_at?: number;
+  created_by?: string;
+  updated_at?: number;
+  updated_by?: string;
 }
 
 function splitName(fullName: string): string[] {
@@ -98,16 +88,6 @@ function splitName(fullName: string): string[] {
     throw new InvalidArgumentError(`Invalid table name '${fullName}': use catalog.schema.table.`);
   }
   return parts;
-}
-
-/**
- * Quotes each part of a one- to three-part name with backticks, escaping embedded backticks.
- * @throws {InvalidArgumentError} When the name has more than three parts or an empty part.
- */
-export function quoteIdentifier(fullName: string): string {
-  return splitName(fullName)
-    .map((part) => `\`${part.replaceAll("`", "``")}\``)
-    .join(".");
 }
 
 function matchesPattern(name: string, pattern: string | undefined): boolean {
@@ -139,8 +119,8 @@ const clamp = (value: number | undefined, fallback: number, max: number): number
   Math.max(1, Math.min(Math.trunc(value ?? fallback), max));
 
 /**
- * Creates the Unity Catalog metadata service: REST listings and descriptions, plus information_schema and lineage
- * queries that the server writes itself (they skip the read-only check).
+ * Creates the Unity Catalog metadata service: REST listings and descriptions, plus the information_schema search
+ * that the server writes itself (it skips the read-only check).
  */
 export function createMetadataService(client: DatabricksClient, statements: Pick<StatementLifecycle, "query">) {
   async function paginate<T>(path: string, key: string, query: Record<string, QueryValue>): Promise<T[]> {
@@ -196,57 +176,19 @@ export function createMetadataService(client: DatabricksClient, statements: Pick
     return { level, items: matching.slice(0, limit), truncated: matching.length > limit };
   }
 
-  async function readTags(
-    fullName: string,
-  ): Promise<{ table: Record<string, string>; columns: Map<string, Record<string, string>> }> {
-    const [catalog, schema, table] = splitName(fullName);
-    const filter = "catalog_name = :catalog AND schema_name = :schema AND table_name = :table";
-    const result = await statements.query({
-      statement:
-        `SELECT NULL AS column_name, tag_name, tag_value FROM system.information_schema.table_tags WHERE ${filter} ` +
-        `UNION ALL SELECT column_name, tag_name, tag_value FROM system.information_schema.column_tags WHERE ${filter}`,
-      parameters: [
-        { name: "catalog", value: catalog ?? "" },
-        { name: "schema", value: schema ?? "" },
-        { name: "table", value: table ?? "" },
-      ],
-      rowLimit: 1000,
-    });
-    const tableTags: Record<string, string> = {};
-    const columnTags = new Map<string, Record<string, string>>();
-    for (const [column, tagName, tagValue] of rowsOf(result)) {
-      if (tagName === null || tagName === undefined) continue;
-      const target = column === null || column === undefined ? tableTags : (columnTags.get(column) ?? {});
-      target[tagName] = tagValue ?? "";
-      if (column !== null && column !== undefined) columnTags.set(column, target);
-    }
-    return { table: tableTags, columns: columnTags };
-  }
-
-  async function describeTable(
-    fullName: string,
-    options: { sampleRows?: number | undefined; lineage?: boolean | undefined } = {},
-  ): Promise<DescribeTableResult> {
+  /** Describes a table with the one Unity Catalog `GET`; it starts no warehouse. */
+  async function describeTable(fullName: string): Promise<TableDescription> {
     splitName(fullName);
     const table = await client.get<ApiTable>(`/api/2.1/unity-catalog/tables/${encodeURIComponent(fullName)}`);
-    const notes: string[] = [];
-    let tags: Awaited<ReturnType<typeof readTags>> | undefined;
-    try {
-      tags = await readTags(table.full_name);
-    } catch (error) {
-      notes.push(`Tags unavailable: ${(error as Error).message}`);
-    }
 
-    const columns = (table.columns ?? []).map((column): ColumnDescription => {
-      const columnTags = tags?.columns.get(column.name);
-      return {
+    const columns = (table.columns ?? []).map(
+      (column): ColumnDescription => ({
         name: column.name,
         type: column.type_text,
         nullable: column.nullable,
         comment: column.comment,
-        ...(columnTags === undefined ? {} : { tags: columnTags }),
-      };
-    });
+      }),
+    );
     const primaryKey = table.table_constraints?.find((constraint) => constraint.primary_key_constraint)
       ?.primary_key_constraint?.child_columns;
     const foreignKeys = (table.table_constraints ?? [])
@@ -264,29 +206,6 @@ export function createMetadataService(client: DatabricksClient, statements: Pick
       .sort((left, right) => (left.partition_index ?? 0) - (right.partition_index ?? 0))
       .map((column) => column.name);
 
-    let sample: StatementResult | undefined;
-    if (options.sampleRows !== undefined && options.sampleRows > 0) {
-      try {
-        sample = await sampleTable(table.full_name, options.sampleRows);
-      } catch (error) {
-        if (!(error instanceof SqlError)) throw error;
-        notes.push(`Sample unavailable: ${error.message}`);
-      }
-    }
-    let lineage: DescribeTableResult["lineage"];
-    if (options.lineage === true) {
-      try {
-        lineage = {
-          upstream: await lineageQuery(table.full_name, "upstream"),
-          downstream: await lineageQuery(table.full_name, "downstream"),
-        };
-      } catch (error) {
-        if (error instanceof UnsupportedError) notes.push(error.message);
-        else if (error instanceof SqlError) notes.push(`Lineage unavailable: ${error.message}`);
-        else throw error;
-      }
-    }
-
     return {
       fullName: table.full_name,
       ...(table.table_type === undefined ? {} : { type: table.table_type }),
@@ -298,10 +217,10 @@ export function createMetadataService(client: DatabricksClient, statements: Pick
       ...(foreignKeys.length === 0 ? {} : { foreignKeys }),
       ...(clusteringColumns === undefined ? {} : { clusteringColumns }),
       ...(partitionColumns.length === 0 ? {} : { partitionColumns }),
-      ...(tags === undefined ? {} : { tags: tags.table }),
-      ...(notes.length === 0 ? {} : { notes }),
-      ...(sample === undefined ? {} : { sample }),
-      ...(lineage === undefined ? {} : { lineage }),
+      ...(table.created_at === undefined ? {} : { createdAt: new Date(table.created_at).toISOString() }),
+      ...(table.created_by === undefined ? {} : { createdBy: table.created_by }),
+      ...(table.updated_at === undefined ? {} : { updatedAt: new Date(table.updated_at).toISOString() }),
+      ...(table.updated_by === undefined ? {} : { updatedBy: table.updated_by }),
     };
   }
 
@@ -334,38 +253,6 @@ export function createMetadataService(client: DatabricksClient, statements: Pick
       column: column ?? null,
       comment: comment ?? null,
     }));
-  }
-
-  async function sampleTable(fullName: string, limit?: number): Promise<StatementResult> {
-    const rows = clamp(limit, DEFAULT_SAMPLE_ROWS, MAX_SAMPLE_ROWS);
-    return statements.query({ statement: `SELECT * FROM ${quoteIdentifier(fullName)} LIMIT ${rows}`, rowLimit: rows });
-  }
-
-  async function lineageQuery(fullName: string, direction: "upstream" | "downstream"): Promise<LineageEdge[]> {
-    const [selected, filtered] =
-      direction === "upstream"
-        ? ["source_table_full_name", "target_table_full_name"]
-        : ["target_table_full_name", "source_table_full_name"];
-    const statement =
-      `SELECT ${selected} AS table_name, CAST(max(event_time) AS STRING) AS last_seen FROM system.access.table_lineage ` +
-      `WHERE ${filtered} = :table AND ${selected} IS NOT NULL GROUP BY ${selected} ORDER BY last_seen DESC LIMIT ${LINEAGE_LIMIT}`;
-    try {
-      const result = await statements.query({
-        statement,
-        parameters: [{ name: "table", value: fullName }],
-        rowLimit: LINEAGE_LIMIT,
-      });
-      return rowsOf(result).map(([table, lastSeen]) => ({ table: table ?? null, lastSeen: lastSeen ?? null }));
-    } catch (error) {
-      const message = (error as Error).message;
-      if (LINEAGE_UNAVAILABLE.test(message)) {
-        throw new UnsupportedError(
-          `Lineage is unavailable: system.access.table_lineage cannot be read (${message}). It requires Unity Catalog system tables (system.access) to be enabled and SELECT on them.`,
-          { cause: error },
-        );
-      }
-      throw error;
-    }
   }
 
   return { listObjects, describeTable, searchMetadata };

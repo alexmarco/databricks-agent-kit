@@ -162,14 +162,6 @@ async function startDatabricksStub(options: { warehouseFailures?: number } = {})
           result: { data_array: [["1"]] },
         });
       }
-      if (statement.includes("information_schema")) {
-        return send(200, {
-          statement_id: "st-tags",
-          status: { state: "SUCCEEDED" },
-          manifest: { schema: { columns: [] }, total_row_count: 0 },
-          result: { data_array: [] },
-        });
-      }
       return send(200, {
         statement_id: "st-fail",
         status: {
@@ -372,6 +364,8 @@ test("stdio: a real dak mcp process serves tools, enforces read-only and persist
 
     const described = await client.callTool({ name: "describe_table", arguments: { full_name: "main.sales.orders" } });
     assert.equal(JSON.parse(text(described)).fullName, "main.sales.orders");
+    assert.equal(described.isError, undefined);
+    assert.equal(JSON.parse(text(described)).notes, undefined, "no SQL statement ran for the description");
 
     const recent = resourceJson((await client.readResource({ uri: "resource://logs/executions/recent" })).contents);
     const failedWrite = recent.executions.find(

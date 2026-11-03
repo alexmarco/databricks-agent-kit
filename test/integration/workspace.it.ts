@@ -118,24 +118,15 @@ test("lists catalogs and describes the sample table", async () => {
   const catalogs = await metadata.listObjects({});
   assert.equal(catalogs.level, "catalogs");
   assert.ok(catalogs.items.length > 0);
-  const description = await metadata.describeTable(table, { sampleRows: 3 });
+  const description = await metadata.describeTable(table);
   assert.equal(description.fullName, table);
   assert.ok(description.columns.length > 0);
-  assert.ok((description.sample?.rows ?? []).length <= 3);
 });
 
 test("searches metadata through information_schema", async () => {
   const name = table.split(".").at(-1)!;
   const results = await metadata.searchMetadata({ query: name, limit: 10 });
   assert.ok(results.some((entry) => entry.table === name));
-});
-
-test("lineage returns data or an explicit note when unavailable", async () => {
-  const description = await metadata.describeTable(table, { lineage: true });
-  assert.ok(
-    description.lineage !== undefined || (description.notes ?? []).some((note) => /lineage/i.test(note)),
-    "lineage or a note about it",
-  );
 });
 
 test("the read-only guard blocks writes before reaching the workspace", async () => {
