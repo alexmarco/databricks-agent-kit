@@ -22,7 +22,8 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 2001,
       "version": 1,
@@ -93,7 +94,8 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 2003,
       "version": 1,
@@ -164,7 +166,8 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 2005,
       "version": 1,

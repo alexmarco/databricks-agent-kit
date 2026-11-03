@@ -22,7 +22,8 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 1001,
       "version": 1,
@@ -93,7 +94,8 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 1003,
       "version": 1,
@@ -164,7 +166,8 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 1005,
       "version": 1,
@@ -395,7 +398,8 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 1011,
       "version": 1,
@@ -466,7 +470,8 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 1013,
       "version": 1,
@@ -537,7 +542,8 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 1015,
       "version": 1,
@@ -977,7 +983,8 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 1026,
       "version": 1,
@@ -1091,7 +1098,8 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 1029,
       "version": 1,
@@ -1205,7 +1213,8 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 1032,
       "version": 1,
@@ -1319,7 +1328,8 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 1035,
       "version": 1,
@@ -1433,7 +1443,8 @@
       "groupIds": [],
       "frameId": null,
       "roundness": {
-        "type": 3
+        "type": 3,
+        "value": 12
       },
       "seed": 1038,
       "version": 1,
