@@ -12,6 +12,15 @@ the recommended method for personal use. The other methods are in [authenticatio
 
 ## 1. Install the server
 
+The quickest way is the install script. It installs the latest release with npm and puts `dak` on your PATH:
+
+```bash
+curl -fsSL https://github.com/alexmarco/databricks-agent-kit/releases/latest/download/install.sh | sh
+dak --version
+```
+
+On Windows, run it from Git Bash or WSL. To contribute or to run unreleased code, install from a clone instead:
+
 ```bash
 git clone https://github.com/alexmarco/databricks-agent-kit.git
 cd databricks-agent-kit
