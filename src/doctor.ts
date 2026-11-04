@@ -2,7 +2,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { FetchLike } from "./auth.ts";
 import type { Settings } from "./config.ts";
-import { messageWithoutUrls } from "./errors.ts";
+import { messageOf, messageWithoutUrls } from "./errors.ts";
 import type { StatementLifecycle } from "./statements.ts";
 import type { WarehouseSelection } from "./warehouses.ts";
 import type { WorkspaceConnection, WorkspaceLimits } from "./workspace-session.ts";
@@ -54,7 +54,38 @@ const MIN_CLI = [1, 0, 0] as const;
 const DOWNLOAD_WAIT_BUDGET_MS = 60_000;
 const DOWNLOAD_TIMEOUT_MS = 15_000;
 
-const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+/** A check without its name, which the runner adds. */
+type CheckOutcome = Omit<DoctorCheck, "name">;
+
+/** Runs the work of a check: its outcome, or what `onError` makes of the error it threw. */
+async function check(
+  name: string,
+  work: () => Promise<CheckOutcome>,
+  onError: (error: unknown) => CheckOutcome,
+): Promise<DoctorCheck> {
+  try {
+    return { name, ...(await work()) };
+  } catch (error) {
+    return { name, ...onError(error) };
+  }
+}
+
+/** Outcome for a check whose work threw: the error message after `prefix`, with the manual step that fixes it. */
+const failed =
+  (status: "fail" | "warn", next: string, prefix = "") =>
+  (error: unknown): CheckOutcome => ({ status, detail: `${prefix}${messageOf(error)}`, next });
+
+/** True when the first `x.y.z` in `output` is `minimum` or newer; false when the output holds no such version. */
+export function meetsMinimumVersion(output: string, minimum: readonly number[]): boolean {
+  const match = /(\d+)\.(\d+)\.(\d+)/.exec(output);
+  if (match === null) return false;
+  const version = [Number(match[1]), Number(match[2]), Number(match[3])];
+  for (const [position, required] of minimum.entries()) {
+    const difference = (version[position] ?? 0) - required;
+    if (difference !== 0) return difference > 0;
+  }
+  return true;
+}
 
 /**
  * Creates the export directory (owner-only, like the export manager) if needed and proves it is writable by writing and
@@ -133,109 +164,99 @@ async function remoteChecks(
 ): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = [];
 
-  try {
-    const me = await client.get<{ userName?: string; displayName?: string }>("/api/2.0/preview/scim/v2/Me");
-    checks.push({ name: "Identity", status: "ok", detail: me.userName ?? me.displayName ?? "authenticated" });
-  } catch (error) {
-    checks.push({
-      name: "Identity",
-      status: "fail",
-      detail: messageOf(error),
-      next: "Check the credentials of the selected profile or environment.",
-    });
-  }
+  checks.push(
+    await check(
+      "Identity",
+      async () => {
+        const me = await client.get<{ userName?: string; displayName?: string }>("/api/2.0/preview/scim/v2/Me");
+        return { status: "ok", detail: me.userName ?? me.displayName ?? "authenticated" };
+      },
+      failed("fail", "Check the credentials of the selected profile or environment."),
+    ),
+  );
 
-  let warehouseId: string;
-  try {
-    warehouseId = await warehouses.resolve();
-    const warehouse = (await warehouses.list()).find((candidate) => candidate.id === warehouseId);
-    checks.push({
-      name: "SQL warehouse",
-      status: "ok",
-      detail: warehouse === undefined ? warehouseId : `${warehouse.id} (${warehouse.name}, ${warehouse.state})`,
-    });
-  } catch (error) {
-    checks.push({
-      name: "SQL warehouse",
-      status: "fail",
-      detail: messageOf(error),
-      next: "Set DATABRICKS_WAREHOUSE_ID or get CAN USE on a SQL warehouse.",
-    });
+  // Set only when the whole check succeeds, so an undefined value means that it failed.
+  let warehouseId = undefined as string | undefined;
+  checks.push(
+    await check(
+      "SQL warehouse",
+      async () => {
+        const resolvedId = await warehouses.resolve();
+        const warehouse = (await warehouses.list()).find((candidate) => candidate.id === resolvedId);
+        warehouseId = resolvedId;
+        return {
+          status: "ok",
+          detail: warehouse === undefined ? resolvedId : `${warehouse.id} (${warehouse.name}, ${warehouse.state})`,
+        };
+      },
+      failed("fail", "Set DATABRICKS_WAREHOUSE_ID or get CAN USE on a SQL warehouse."),
+    ),
+  );
+  if (warehouseId === undefined) {
     for (const name of ["SQL execution", "information_schema", "Result download"])
       checks.push({ name, status: "skip", detail: "no SQL warehouse" });
     return checks;
   }
+  const resolvedWarehouseId = warehouseId;
 
-  let sqlExecutionFailed = false;
-  try {
-    const result = await statements.submitServerSql({ statement: "SELECT 1", warehouseId, rowLimit: 1 });
-    checks.push(
-      result.state === "SUCCEEDED"
-        ? { name: "SQL execution", status: "ok", detail: "SELECT 1 succeeded" }
+  const sqlExecution = await check(
+    "SQL execution",
+    async () => {
+      const result = await statements.submitServerSql({
+        statement: "SELECT 1",
+        warehouseId: resolvedWarehouseId,
+        rowLimit: 1,
+      });
+      return result.state === "SUCCEEDED"
+        ? { status: "ok", detail: "SELECT 1 succeeded" }
         : {
-            name: "SQL execution",
             status: "warn",
             detail: `SELECT 1 is ${result.state} (warehouse starting?)`,
             next: "Run dak doctor again in a minute.",
-          },
-    );
-  } catch (error) {
-    sqlExecutionFailed = true;
-    checks.push({
-      name: "SQL execution",
-      status: "fail",
-      detail: messageOf(error),
-      next: "Check CAN USE on the warehouse and that it can start.",
-    });
-  }
-
-  try {
-    await probe(statements, "SELECT 1 FROM system.information_schema.tables LIMIT 1", warehouseId);
-    checks.push({ name: "information_schema", status: "ok", detail: "system.information_schema is readable" });
-  } catch (error) {
-    checks.push({
-      name: "information_schema",
-      status: "warn",
-      detail: messageOf(error),
-      next: "search_metadata needs SELECT on system.information_schema.",
-    });
-  }
+          };
+    },
+    failed("fail", "Check CAN USE on the warehouse and that it can start."),
+  );
+  checks.push(sqlExecution);
 
   checks.push(
-    sqlExecutionFailed
+    await check(
+      "information_schema",
+      async () => {
+        await probe(statements, "SELECT 1 FROM system.information_schema.tables LIMIT 1", resolvedWarehouseId);
+        return { status: "ok", detail: "system.information_schema is readable" };
+      },
+      failed("warn", "search_metadata needs SELECT on system.information_schema."),
+    ),
+  );
+
+  checks.push(
+    sqlExecution.status === "fail"
       ? { name: "Result download", status: "skip", detail: "SQL execution failed" }
-      : await resultDownloadCheck(deps, statements, warehouseId),
+      : await resultDownloadCheck(deps, statements, resolvedWarehouseId),
   );
   return checks;
 }
 
-async function cliCheck(deps: DoctorDependencies): Promise<DoctorCheck> {
-  const name = "Databricks CLI";
-  try {
-    const output = await deps.runCli(["--version"]);
-    const match = /(\d+)\.(\d+)\.(\d+)/.exec(output);
-    const version = match === null ? undefined : [Number(match[1]), Number(match[2]), Number(match[3])];
-    const recent =
-      version !== undefined &&
-      (version[0]! > MIN_CLI[0] ||
-        (version[0] === MIN_CLI[0] &&
-          (version[1]! > MIN_CLI[1] || (version[1] === MIN_CLI[1] && version[2]! >= MIN_CLI[2]))));
-    return recent
-      ? { name, status: "ok", detail: output.trim() }
-      : {
-          name,
-          status: "warn",
-          detail: `${output.trim()} is older than v${MIN_CLI.join(".")}`,
-          next: "Upgrade the Databricks CLI (needed for OAuth U2M and the official skills).",
-        };
-  } catch (error) {
-    return {
-      name,
+function cliCheck(deps: DoctorDependencies): Promise<DoctorCheck> {
+  return check(
+    "Databricks CLI",
+    async () => {
+      const output = await deps.runCli(["--version"]);
+      return meetsMinimumVersion(output, MIN_CLI)
+        ? { status: "ok", detail: output.trim() }
+        : {
+            status: "warn",
+            detail: `${output.trim()} is older than v${MIN_CLI.join(".")}`,
+            next: "Upgrade the Databricks CLI (needed for OAuth U2M and the official skills).",
+          };
+    },
+    (error) => ({
       status: "warn",
       detail: (error as { code?: string }).code === "ENOENT" ? "not installed" : messageOf(error),
       next: "Install it if you use OAuth U2M (databricks auth login) or the official Databricks skills.",
-    };
-  }
+    }),
+  );
 }
 
 async function cacheCheck(deps: DoctorDependencies): Promise<DoctorCheck> {
@@ -243,21 +264,21 @@ async function cacheCheck(deps: DoctorDependencies): Promise<DoctorCheck> {
   const { cacheTtlSeconds, storageDir } = deps.settings;
   if (cacheTtlSeconds === 0) return { name, status: "ok", detail: "disabled (DAK_CACHE_TTL=0)" };
   const path = join(storageDir, "cache.db");
-  try {
-    const { schemaVersion } = await deps.checkCache(path);
-    return {
-      name,
-      status: "ok",
-      detail: `${path}, schema version ${schemaVersion}${schemaVersion === 0 ? " (new file)" : ""}, TTL ${cacheTtlSeconds} s`,
-    };
-  } catch (error) {
-    return {
-      name,
-      status: "fail",
-      detail: `${path}: ${messageOf(error)}`,
-      next: "Delete cache.db (it is rebuilt on use) or set DAK_STORAGE_DIR to a writable directory.",
-    };
-  }
+  return check(
+    name,
+    async () => {
+      const { schemaVersion } = await deps.checkCache(path);
+      return {
+        status: "ok",
+        detail: `${path}, schema version ${schemaVersion}${schemaVersion === 0 ? " (new file)" : ""}, TTL ${cacheTtlSeconds} s`,
+      };
+    },
+    failed(
+      "fail",
+      "Delete cache.db (it is rebuilt on use) or set DAK_STORAGE_DIR to a writable directory.",
+      `${path}: `,
+    ),
+  );
 }
 
 /**
@@ -266,23 +287,23 @@ async function cacheCheck(deps: DoctorDependencies): Promise<DoctorCheck> {
  */
 export async function runDoctor(deps: DoctorDependencies): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = [];
-  let connection: DoctorConnection | undefined;
-  try {
-    connection = await deps.connect();
-    const { auth } = connection;
-    checks.push({
-      name: "Authentication",
-      status: "ok",
-      detail: `${auth.method} on ${auth.host} (requested profile: ${deps.settings.profile})`,
-    });
-  } catch (error) {
-    checks.push({
-      name: "Authentication",
-      status: "fail",
-      detail: messageOf(error),
-      next: "See README > Authentication for the manual steps.",
-    });
-  }
+  // Set only when the authentication check succeeds, so an undefined value means that it failed.
+  let connection = undefined as DoctorConnection | undefined;
+  checks.push(
+    await check(
+      "Authentication",
+      async () => {
+        const connected = await deps.connect();
+        connection = connected;
+        const { auth } = connected;
+        return {
+          status: "ok",
+          detail: `${auth.method} on ${auth.host} (requested profile: ${deps.settings.profile})`,
+        };
+      },
+      failed("fail", "See README > Authentication for the manual steps."),
+    ),
+  );
 
   if (connection === undefined) {
     for (const name of REMOTE_CHECKS) checks.push({ name, status: "skip", detail: "authentication failed" });
@@ -291,30 +312,28 @@ export async function runDoctor(deps: DoctorDependencies): Promise<DoctorCheck[]
   }
 
   const { exportDir } = deps.settings;
-  try {
-    await deps.ensureExportDir(exportDir);
-    checks.push({ name: "Export directory", status: "ok", detail: exportDir });
-  } catch (error) {
-    checks.push({
-      name: "Export directory",
-      status: "fail",
-      detail: `${exportDir}: ${messageOf(error)}`,
-      next: "Set DAK_EXPORT_DIR to a writable directory.",
-    });
-  }
+  checks.push(
+    await check(
+      "Export directory",
+      async () => {
+        await deps.ensureExportDir(exportDir);
+        return { status: "ok", detail: exportDir };
+      },
+      failed("fail", "Set DAK_EXPORT_DIR to a writable directory.", `${exportDir}: `),
+    ),
+  );
 
   const logPath = join(deps.settings.storageDir, "logs.db");
-  try {
-    (await deps.openRepository(logPath)).close();
-    checks.push({ name: "Log storage", status: "ok", detail: logPath });
-  } catch (error) {
-    checks.push({
-      name: "Log storage",
-      status: "fail",
-      detail: `${logPath}: ${messageOf(error)}`,
-      next: "Set DAK_STORAGE_DIR to a writable directory.",
-    });
-  }
+  checks.push(
+    await check(
+      "Log storage",
+      async () => {
+        (await deps.openRepository(logPath)).close();
+        return { status: "ok", detail: logPath };
+      },
+      failed("fail", "Set DAK_STORAGE_DIR to a writable directory.", `${logPath}: `),
+    ),
+  );
 
   checks.push(await cacheCheck(deps));
   checks.push(await cliCheck(deps));

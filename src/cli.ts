@@ -9,6 +9,7 @@ import { sleep } from "./abort.ts";
 import { defaultAuthDependencies, resolveAuth } from "./auth.ts";
 import { createClient, type ClientDependencies } from "./client.ts";
 import { defaultStorageDir, resolveSettings, type CliFlags, type Settings } from "./config.ts";
+import { messageOf } from "./errors.ts";
 import { DOCTOR_LIMITS, ensureWritableDirectory, formatReport, runDoctor } from "./doctor.ts";
 import { cleanupOrphanedParts } from "./export/manager.ts";
 import { startHttpServer } from "./http.ts";
@@ -178,7 +179,7 @@ main(process.argv.slice(2)).then(
     if (code !== undefined) process.exitCode = code;
   },
   (error: unknown) => {
-    process.stderr.write(`dak: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`dak: ${messageOf(error)}\n`);
     process.exitCode = 1;
   },
 );

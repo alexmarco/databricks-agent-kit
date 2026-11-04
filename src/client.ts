@@ -1,5 +1,5 @@
 import type { AuthProvider, FetchLike } from "./auth.ts";
-import { DakError } from "./errors.ts";
+import { DakError, messageOf } from "./errors.ts";
 
 /** Non-retryable error response from a Databricks REST API, with an actionable hint when one is known. */
 export class DatabricksApiError extends DakError {
@@ -186,7 +186,7 @@ export function createClient(auth: AuthProvider, deps: ClientDependencies): Data
               path: loggedPath,
               attempt,
               delayMs,
-              error: error instanceof Error ? error.message : String(error),
+              error: messageOf(error),
             }),
           );
           await deps.sleep(delayMs);

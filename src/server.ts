@@ -1,13 +1,12 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
-import { DakError } from "./errors.ts";
+import { DakError, messageOf } from "./errors.ts";
 import type { ExecutionScope } from "./execution-scope.ts";
 import { describeArguments } from "./logging/arguments.ts";
 import type { LogRepository } from "./logging/repository.ts";
 import type { LogService } from "./logging/service.ts";
-import type { CacheKind } from "./metadata-cache.ts";
-import { createStatementLookup } from "./statement-lookup.ts";
-import type { StatementLifecycle } from "./statements.ts";
+import type { CacheKind, MetadataCache } from "./metadata-cache.ts";
+import { DAY_MS } from "./time.ts";
 import type { Workspace } from "./workspace-session.ts";
 
 /** Names of every tool the server registers. */
@@ -19,19 +18,15 @@ export const TOOL_NAMES = [
   "get_statement",
 ] as const;
 
-/** The part of the statement lifecycle that runs the agent's statements: always under the read-only policy. */
-export type AgentStatements = Pick<StatementLifecycle, "submit" | "get" | "cancel">;
-
 /** Services behind the MCP tools and resources. */
 export interface ServerDependencies {
   /**
    * The Databricks modules, from the workspace session (ADR 0014). Each tool call and recorded resource read awaits it inside
    * its execution, so a failed credential resolution is the single error of that call and the next call tries again.
-   * The tool handlers receive only the statement methods of the agent: not the ones for server-written SQL (ADR 0015).
+   * The tool handlers run statements only through `agentStatements`, which holds no method for server-written SQL
+   * (ADR 0015, ADR 0023).
    */
-  workspace(): Promise<
-    Pick<Workspace, "warehouses" | "metadata" | "exports" | "cache"> & { statements: AgentStatements }
-  >;
+  workspace(): Promise<Pick<Workspace, "warehouses" | "metadata" | "cache" | "agentStatements">>;
   /** Opens the execution of each tool call, recorded resource read and export; the services annotate through it. */
   scope: ExecutionScope;
   logs: LogService;
@@ -40,7 +35,6 @@ export interface ServerDependencies {
   allowWrites?: boolean;
 }
 
-const DAY_MS = 86_400_000;
 const RECENT_LIMIT = 50;
 /** Result fields copied to the final log entry of a tool call when present. */
 const SUMMARY_KEYS = ["statementId", "warehouseId", "state", "rowCount", "truncated"] as const;
@@ -132,8 +126,7 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
         try {
           return reply(JSON.stringify(await read(url, variables)));
         } catch (error) {
-          if (!(error instanceof DakError))
-            logs.lifecycle.error(error instanceof Error ? error.message : String(error), undefined, error);
+          if (!(error instanceof DakError)) logs.lifecycle.error(messageOf(error), undefined, error);
           throw error;
         }
       }
@@ -197,19 +190,16 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
         .object({ format: z.enum(["csv", "parquet", "sqlite"]), name: z.string().max(64).optional() })
         .optional(),
     }),
-    async (args) => {
-      const { statements, exports } = await workspace();
-      const request = {
+    async (args) =>
+      (await workspace()).agentStatements.execute({
         statement: args.statement,
         parameters: args.parameters,
         catalog: args.catalog,
         schema: args.schema,
+        rowLimit: args.row_limit,
         warehouseId: args.warehouse_id,
-      };
-      if (args.export === undefined) return statements.submit({ ...request, rowLimit: args.row_limit });
-      const state = await exports.start({ statement: request, format: args.export.format, name: args.export.name });
-      return { statementId: state.statementId, state: "PENDING", export: state };
-    },
+        export: args.export,
+      }),
   );
   tool(
     "get_statement",
@@ -220,11 +210,10 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
       cancel: z.boolean().optional(),
     }),
     async (args) => {
-      const { statements, exports } = await workspace();
-      const lookup = createStatementLookup({ statements, exports });
+      const { agentStatements } = await workspace();
       return args.cancel === true
-        ? lookup.cancel(args.statement_id)
-        : lookup.get(args.statement_id, { waitSeconds: args.wait_seconds });
+        ? agentStatements.cancel(args.statement_id)
+        : agentStatements.get(args.statement_id, { waitSeconds: args.wait_seconds });
     },
   );
 
@@ -241,29 +230,30 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     enabled: false,
     message: "The metadata cache is disabled (DAK_CACHE_TTL=0).",
   };
-  /** One cache entry of the current identity; `key` is the table name or the level path (empty for the catalogs). */
-  const cacheEntry = async (kind: CacheKind, key: string) => {
+  /** Answer of a cache resource: what `read` makes of the cache of the current identity, or that the cache is disabled. */
+  const cacheAnswer = async (read: (cache: MetadataCache) => object) => {
     const { cache } = await workspace();
-    if (cache === undefined) return CACHE_DISABLED;
-    const entry = cache.entry(kind, key);
-    if (entry === undefined) {
-      const what = key === "" ? "the catalogs" : `'${key}'`;
-      throw new DakError(
-        "NOT_FOUND",
-        `No cache entry for ${kind} ${what}: it was never looked up with this identity, or it was purged.`,
-      );
-    }
-    return { enabled: true, kind, key, ...entry };
+    return cache.enabled ? { enabled: true, ...read(cache) } : CACHE_DISABLED;
   };
+  /** One cache entry of the current identity; `key` is the table name or the level path (empty for the catalogs). */
+  const cacheEntry = (kind: CacheKind, key: string) =>
+    cacheAnswer((cache) => {
+      const entry = cache.entry(kind, key);
+      if (entry === undefined) {
+        const what = key === "" ? "the catalogs" : `'${key}'`;
+        throw new DakError(
+          "NOT_FOUND",
+          `No cache entry for ${kind} ${what}: it was never looked up with this identity, or it was purged.`,
+        );
+      }
+      return { kind, key, ...entry };
+    });
   resource(
     "cache-stats",
     "resource://cache/stats",
     "Efficiency of the metadata cache for this identity: hits, misses, reloads, hit ratio and time saved, by kind.",
     true,
-    async () => {
-      const { cache } = await workspace();
-      return cache === undefined ? CACHE_DISABLED : { enabled: true, ...cache.stats() };
-    },
+    () => cacheAnswer((cache) => cache.stats()),
   );
   resource(
     "cache-entry-table",

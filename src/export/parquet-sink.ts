@@ -1,6 +1,7 @@
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Compression, Table, WriterPropertiesBuilder, writeParquet } from "parquet-wasm/node";
+import { messageOf } from "../errors.ts";
 import { exportPath } from "./paths.ts";
 import type { ChunkSink, SinkContext } from "./types.ts";
 
@@ -13,7 +14,7 @@ function toParquet(index: number, arrowBytes: Uint8Array): Uint8Array {
     return writeParquet(Table.fromIPCStream(arrowBytes), properties);
   } catch (error) {
     // wasm failures may surface as plain strings; keep them as the cause of a real Error.
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = messageOf(error);
     throw new Error(`Parquet export: chunk ${index} could not be converted to Parquet (${detail})`, {
       cause: error,
     });

@@ -1,11 +1,12 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createAgentStatements } from "../src/agent-statements.ts";
 import { createExecutionScope } from "../src/execution-scope.ts";
 import type { ExportManager } from "../src/export/manager.ts";
 import type { ExportFormat, ExportState } from "../src/export/types.ts";
 import type { MetadataService } from "../src/metadata.ts";
-import type { MetadataCache } from "../src/metadata-cache.ts";
+import { disabledMetadataCache, type MetadataCache } from "../src/metadata-cache.ts";
 import type { WarehouseSelection } from "../src/warehouses.ts";
 import type { ExecuteSqlRequest, StatementLifecycle, StatementResult } from "../src/statements.ts";
 import { SqlError } from "../src/statements.ts";
@@ -116,16 +117,18 @@ export function fakeServices(logs: LogService, options: { cache?: boolean } = {}
   };
   /** Knows the entries `table/main.s.t`, `listing/main.default` and the catalogs listing (empty key). */
   const cache = (options.cache === false
-    ? undefined
+    ? disabledMetadataCache
     : {
+        enabled: true,
         stats: () => FAKE_CACHE_STATS,
         entry: (kind: string, key: string) =>
           (kind === "table" && key.toLowerCase() === "main.s.t") ||
           (kind === "listing" && ["main.default", ""].includes(key.toLowerCase()))
             ? FAKE_CACHE_ENTRY
             : undefined,
-      }) as unknown as MetadataCache | undefined;
-  const workspace = async () => ({ warehouses, statements, metadata, exports, cache });
+      }) as unknown as MetadataCache;
+  const agentStatements = createAgentStatements({ statements, exports });
+  const workspace = async () => ({ warehouses, metadata, cache, agentStatements });
   return {
     workspace,
     warehouses,

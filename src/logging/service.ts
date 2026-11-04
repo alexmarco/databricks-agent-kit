@@ -1,12 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { LogLevel } from "../config.ts";
-import { DakError } from "../errors.ts";
+import { DakError, messageOf } from "../errors.ts";
+import { DAY_MS } from "../time.ts";
 import type { ExecutionStatus, ExecutionTransport, LogRepository, QueueEvent } from "./repository.ts";
 import { uuidv7 } from "./uuid.ts";
 
 const LEVEL_ORDER: Record<LogLevel, number> = { trace: 10, debug: 20, info: 30, warn: 40, error: 50, fatal: 60 };
 const SECRET_KEY = /token|secret|password|authorization|api[-_]?key/i;
-const DAY_MS = 86_400_000;
 
 /** Log service settings; the optional ones default to the production values. */
 export interface LogServiceOptions {
@@ -184,7 +184,7 @@ export function createLogService(options: LogServiceOptions): LogService {
       fatal: log("fatal"),
       complete: () => finish("completed"),
       fail: (failure, metadata) => {
-        const message = failure instanceof Error ? failure.message : String(failure);
+        const message = messageOf(failure);
         if (failure instanceof DakError) warn(message, metadata);
         else error(message, metadata, failure);
         finish("failed");
