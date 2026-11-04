@@ -1,6 +1,6 @@
 # ADR 0014: Workspace session module
 
-- Status: Accepted
+- Status: Accepted. Keeping the statement lookup in the server is superseded by [ADR 0023](0023-agent-statements-module.md).
 - Date: 2026-10-19
 
 ## Context

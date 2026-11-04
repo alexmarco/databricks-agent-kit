@@ -1,6 +1,6 @@
 # ADR 0011: Statement lookup for `get_statement`
 
-- Status: Accepted
+- Status: Accepted. The name of the module and its place in the server are superseded by [ADR 0023](0023-agent-statements-module.md).
 - Date: 2026-10-19
 
 ## Context

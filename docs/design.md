@@ -254,7 +254,7 @@ databricks-agent-kit/
     auth.ts               # PAT, OAuth M2M, CLI-delegated U2M
     client.ts             # fetch wrapper, retries, error mapping
     statements.ts         # statement lifecycle: submit, read-only policy, polling, cancel, result shaping (ADR 0009)
-    statement-lookup.ts   # get_statement: one answer for any statement id, export or plain (ADR 0011)
+    agent-statements.ts   # agent statements: execute (inline or export), get and cancel for any statement id (ADR 0011, ADR 0023)
     execution-scope.ts    # execution scope: open an execution, run work in it, the single final entry and status (ADR 0013)
     warehouses.ts         # warehouse selection: explicit, configured and automatic choice, listing (ADR 0012)
     metadata.ts           # catalogs, schemas, tables, search

@@ -1,3 +1,4 @@
+import { createAgentStatements, type AgentStatements } from "./agent-statements.ts";
 import type { AuthMethod, AuthProvider, FetchLike } from "./auth.ts";
 import type { ClientDependencies, DatabricksClient } from "./client.ts";
 import { DakError } from "./errors.ts";
@@ -49,6 +50,8 @@ export interface Workspace extends WorkspaceConnection {
   /** The metadata cache of the session's identity; undefined when it is disabled. */
   cache: MetadataCache | undefined;
   exports: ExportManager;
+  /** The agent's statements (ADR 0023): `execute`, `get` and `cancel` for any statement id, always under the read-only policy. */
+  agentStatements: AgentStatements;
 }
 
 export interface WorkspaceSessionOptions {
@@ -147,6 +150,7 @@ export function createWorkspaceSession(
       metadata: createMetadataService(connection.client, connection.statements, cache),
       cache,
       exports,
+      agentStatements: createAgentStatements({ statements: connection.statements, exports }),
     };
   };
 
