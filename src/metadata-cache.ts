@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ExecutionScope } from "./execution-scope.ts";
 import { loadDatabaseSync } from "./sqlite.ts";
+import { DAY_MS } from "./time.ts";
 
 /** What a cache entry holds: a table description or the full listing of one level (ADR 0021). */
 export type CacheKind = "table" | "listing";
@@ -117,7 +118,6 @@ PRAGMA user_version = ${SCHEMA_VERSION};
 type Row = Record<string, unknown>;
 
 const FILE_SUFFIXES = ["", "-wal", "-shm"];
-const DAY_MS = 86_400_000;
 /** Entries not used for this long are deleted. */
 const RETENTION_MS = 30 * DAY_MS;
 const PURGE_INTERVAL_MS = DAY_MS;

@@ -2,7 +2,7 @@ import { access, lstat, mkdir, readdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { untilAborted } from "../abort.ts";
 import type { FetchLike } from "../auth.ts";
-import { DakError, InvalidArgumentError, messageWithoutUrls } from "../errors.ts";
+import { DakError, InvalidArgumentError, messageOf, messageWithoutUrls } from "../errors.ts";
 import { ExecutionCancelled, type ExecutionScope } from "../execution-scope.ts";
 import type { ExecutionHandle } from "../logging/service.ts";
 import type { ExecuteSqlRequest, ExportChunkLink, ExportResultInfo, StatementLifecycle } from "../statements.ts";
@@ -136,7 +136,7 @@ export function createExportManager(deps: ExportManagerDependencies): ExportMana
           reason = `HTTP ${status}`;
         } catch (error) {
           if (signal.aborted) throw error;
-          reason = messageWithoutUrls(error instanceof Error ? error.message : String(error));
+          reason = messageWithoutUrls(messageOf(error));
         }
       }
       if ((expired || status === 403) && !refreshed) {
@@ -275,7 +275,7 @@ export function createExportManager(deps: ExportManagerDependencies): ExportMana
       }
       Object.assign(job.state, {
         status: "FAILED",
-        error: messageWithoutUrls(failure instanceof Error ? failure.message : String(failure)),
+        error: messageWithoutUrls(messageOf(failure)),
       });
       throw failure;
     }
@@ -318,7 +318,7 @@ export function createExportManager(deps: ExportManagerDependencies): ExportMana
         if (!FINAL_STATUSES.has(job.state.status))
           Object.assign(job.state, {
             status: "FAILED",
-            error: messageWithoutUrls(error instanceof Error ? error.message : String(error)),
+            error: messageWithoutUrls(messageOf(error)),
           });
       });
     jobs.set(statementId, job);

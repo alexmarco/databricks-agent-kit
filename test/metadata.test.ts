@@ -162,6 +162,18 @@ test("listObjects rejects a schema without a catalog", async () => {
   );
 });
 
+test("describeTable rejects a name without exactly three parts and makes no request", async () => {
+  for (const name of ["table", "schema.table", "a.b.c.d", "main..t", "main.s."]) {
+    const { client, calls } = fakeClient({});
+    await assert.rejects(
+      createMetadataService(client, noStatements).describeTable(name),
+      (error: unknown) => error instanceof InvalidArgumentError && error.message.includes("catalog.schema.table"),
+      name,
+    );
+    assert.equal(calls.length, 0, `${name} made a request`);
+  }
+});
+
 test("describeTable returns columns, constraints, clustering, partitions and audit fields from one REST call", async () => {
   const { client, calls } = fakeClient({
     "/api/2.1/unity-catalog/tables/main.sales.orders": {

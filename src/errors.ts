@@ -31,6 +31,11 @@ export class InvalidArgumentError extends DakError {
   }
 }
 
+/** The message of a thrown value: an `Error`'s own message, or the string form of anything else. */
+export function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** `message` without anything that looks like a URL, plain or percent-encoded: result links are presigned. */
 export function messageWithoutUrls(message: string): string {
   return message.replace(/https?(?::|%3A)(?:\/\/|%2F%2F)\S*/gi, "<url>");

@@ -1,12 +1,13 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
-import { DakError } from "./errors.ts";
+import { DakError, messageOf } from "./errors.ts";
 import type { ExecutionScope } from "./execution-scope.ts";
 import { describeArguments } from "./logging/arguments.ts";
 import type { LogRepository } from "./logging/repository.ts";
 import type { LogService } from "./logging/service.ts";
 import type { CacheKind } from "./metadata-cache.ts";
 import { createStatementLookup } from "./statement-lookup.ts";
+import { DAY_MS } from "./time.ts";
 import type { StatementLifecycle } from "./statements.ts";
 import type { Workspace } from "./workspace-session.ts";
 
@@ -40,7 +41,6 @@ export interface ServerDependencies {
   allowWrites?: boolean;
 }
 
-const DAY_MS = 86_400_000;
 const RECENT_LIMIT = 50;
 /** Result fields copied to the final log entry of a tool call when present. */
 const SUMMARY_KEYS = ["statementId", "warehouseId", "state", "rowCount", "truncated"] as const;
@@ -132,8 +132,7 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
         try {
           return reply(JSON.stringify(await read(url, variables)));
         } catch (error) {
-          if (!(error instanceof DakError))
-            logs.lifecycle.error(error instanceof Error ? error.message : String(error), undefined, error);
+          if (!(error instanceof DakError)) logs.lifecycle.error(messageOf(error), undefined, error);
           throw error;
         }
       }
