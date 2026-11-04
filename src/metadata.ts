@@ -89,7 +89,7 @@ interface ApiTable {
 
 function splitName(fullName: string): string[] {
   const parts = fullName.split(".");
-  if (parts.length > 3 || parts.some((part) => part.trim() === "")) {
+  if (parts.length !== 3 || parts.some((part) => part.trim() === "")) {
     throw new InvalidArgumentError(`Invalid table name '${fullName}': use catalog.schema.table.`);
   }
   return parts;
