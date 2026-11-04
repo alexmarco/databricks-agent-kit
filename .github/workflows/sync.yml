@@ -33,6 +33,7 @@ jobs:
 
       - name: Prepare the sync branch
         id: sync
+        shell: bash
         run: bash scripts/ci/sync-main-into-develop.sh | tee -a "$GITHUB_OUTPUT"
 
       - name: Open the pull request into develop
