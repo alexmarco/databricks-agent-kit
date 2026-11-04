@@ -29,5 +29,6 @@ Possible statuses: Proposed, Accepted, Superseded.
 | [0021](0021-metadata-cache.md)                               | Metadata cache and a REST-only `describe_table`                                | Accepted                            |
 | [0022](0022-releases-with-release-please.md)                 | Releases with Release Please, squash merges into develop and an install script | Accepted                            |
 | [0023](0023-agent-statements-module.md)                      | Agent statements module for `execute_sql` and `get_statement`                  | Accepted                            |
+| [0024](0024-disabled-metadata-cache-adapter.md)              | A disabled metadata cache is an adapter                                        | Accepted                            |
 
 Current design: [docs/design.md](../design.md).

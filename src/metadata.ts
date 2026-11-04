@@ -1,6 +1,6 @@
 import type { DatabricksClient, QueryValue } from "./client.ts";
 import { InvalidArgumentError } from "./errors.ts";
-import type { CacheInfo, MetadataCache } from "./metadata-cache.ts";
+import { disabledMetadataCache, type CacheInfo, type MetadataCache } from "./metadata-cache.ts";
 import type { StatementLifecycle, StatementResult } from "./statements.ts";
 
 const MAX_PAGES = 50;
@@ -130,7 +130,7 @@ const clamp = (value: number | undefined, fallback: number, max: number): number
 export function createMetadataService(
   client: DatabricksClient,
   statements: Pick<StatementLifecycle, "query">,
-  cache?: MetadataCache,
+  cache: MetadataCache = disabledMetadataCache,
 ) {
   async function paginate<T>(path: string, key: string, query: Record<string, QueryValue>): Promise<T[]> {
     const items: T[] = [];
@@ -187,10 +187,7 @@ export function createMetadataService(
           ? listSchemas(request.catalog ?? "")
           : listTables(request.catalog ?? "", request.schema ?? "");
     const path = [request.catalog, request.schema].filter((part) => part !== undefined).join(".");
-    const { value: all, cache: info } =
-      cache === undefined
-        ? { value: await loadAll(), cache: undefined }
-        : await cache.lookup("listing", path, loadAll, { refresh: request.refresh });
+    const { value: all, cache: info } = await cache.lookup("listing", path, loadAll, { refresh: request.refresh });
     const matching = all.filter((item) => matchesPattern(item.name, request.pattern));
     return {
       level,
@@ -253,9 +250,8 @@ export function createMetadataService(
     options: { refresh?: boolean | undefined } = {},
   ): Promise<TableDescription> {
     splitName(fullName);
-    if (cache === undefined) return loadTable(fullName);
     const { value, cache: info } = await cache.lookup("table", fullName, () => loadTable(fullName), options);
-    return { ...value, cache: info };
+    return info === undefined ? value : { ...value, cache: info };
   }
 
   async function searchMetadata(request: {

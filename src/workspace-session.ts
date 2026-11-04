@@ -6,7 +6,7 @@ import { createExecutionScope, type ExecutionScope } from "./execution-scope.ts"
 import { createExportManager, type ExportManager } from "./export/manager.ts";
 import type { LogService } from "./logging/service.ts";
 import { createMetadataService, type MetadataService } from "./metadata.ts";
-import { openMetadataCache, type MetadataCache } from "./metadata-cache.ts";
+import { disabledMetadataCache, openMetadataCache, type MetadataCache } from "./metadata-cache.ts";
 import { createStatementLifecycle, type StatementLifecycle, type StatementLifecycleOptions } from "./statements.ts";
 import { createWarehouseSelection, type WarehouseSelection } from "./warehouses.ts";
 
@@ -47,8 +47,8 @@ export interface WorkspaceConnection {
 /** Everything the server needs from Databricks. */
 export interface Workspace extends WorkspaceConnection {
   metadata: MetadataService;
-  /** The metadata cache of the session's identity; undefined when it is disabled. */
-  cache: MetadataCache | undefined;
+  /** The metadata cache of the session's identity; the disabled one (`enabled` false) when there is none (ADR 0024). */
+  cache: MetadataCache;
   exports: ExportManager;
   /** The agent's statements (ADR 0023): `execute`, `get` and `cancel` for any statement id, always under the read-only policy. */
   agentStatements: AgentStatements;
@@ -121,7 +121,6 @@ export function createWorkspaceSession(
   const scope = createExecutionScope(options.logs);
   let pending: Promise<Workspace> | undefined;
   let closed = false;
-  let cache: MetadataCache | undefined;
 
   const build = async (): Promise<Workspace> => {
     const connection = await connectWorkspace(adapters, {
@@ -136,15 +135,16 @@ export function createWorkspaceSession(
       scope,
       sleep: adapters.sleep,
     });
-    if (options.cache !== undefined && options.cache.ttlSeconds > 0) {
-      cache = await openMetadataCache({
-        path: options.cache.path,
-        ttlSeconds: options.cache.ttlSeconds,
-        identity: connection.auth.cacheIdentity,
-        scope,
-        warn: (message, metadata, error) => options.logs.current().warn(message, metadata, error),
-      });
-    }
+    const cache =
+      options.cache === undefined
+        ? disabledMetadataCache
+        : await openMetadataCache({
+            path: options.cache.path,
+            ttlSeconds: options.cache.ttlSeconds,
+            identity: connection.auth.cacheIdentity,
+            scope,
+            warn: (message, metadata, error) => options.logs.current().warn(message, metadata, error),
+          });
     return {
       ...connection,
       metadata: createMetadataService(connection.client, connection.statements, cache),
@@ -169,7 +169,7 @@ export function createWorkspaceSession(
       // A build in flight is awaited, so its exports are closed too; a failed one has nothing to close.
       const workspace = await pending?.catch(() => undefined);
       await workspace?.exports.close();
-      cache?.close();
+      workspace?.cache.close();
     },
   };
 }

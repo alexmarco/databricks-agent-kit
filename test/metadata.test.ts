@@ -967,3 +967,84 @@ test("checkMetadataCache reports the schema version of a healthy file and reject
     await assert.rejects(checkMetadataCache(path), /not a database/);
   });
 });
+
+const zeroCounters = {
+  entries: 0,
+  hits: 0,
+  misses: 0,
+  expirations: 0,
+  refreshes: 0,
+  reloadsChanged: 0,
+  reloadsUnchanged: 0,
+  hitRatio: null,
+  timeSavedMs: 0,
+  oldestLoadedAt: null,
+};
+
+test("a working cache is enabled", async () => {
+  await withCache(async ({ open }) => {
+    assert.equal((await open()).enabled, true);
+  });
+});
+
+test("a cache that cannot be opened is enabled and answers every lookup from Databricks as bypassed", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "dak-cache-"));
+  const warnings: string[] = [];
+  try {
+    // A directory where the file should be: the file cannot be opened nor recreated.
+    const cache = await openMetadataCache({
+      path: dir,
+      identity: "identity-a",
+      ttlSeconds: 3600,
+      warn: (message) => warnings.push(message),
+    });
+    assert.equal(cache.enabled, true);
+    let loads = 0;
+    const load = async () => ({ loaded: ++loads });
+    assert.deepEqual((await cache.lookup("table", "main.s.t", load)).value, { loaded: 1 });
+    assert.equal((await cache.lookup("table", "main.s.t", load)).cache?.status, "bypassed");
+    assert.equal(loads, 2);
+    assert.equal(cache.entry("table", "main.s.t"), undefined);
+    assert.equal(warnings.length, 1);
+    cache.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a cache opened with a TTL of 0 is disabled: it loads every time, stores nothing and creates no file", async () => {
+  await withCache(async ({ open, path }) => {
+    const cache = await open({ ttlSeconds: 0 });
+    assert.equal(cache.enabled, false);
+    let loads = 0;
+    const load = async () => ({ loaded: ++loads });
+    const first = await cache.lookup("table", "main.s.t", load);
+    const second = await cache.lookup("table", "main.s.t", load, { refresh: true });
+    assert.deepEqual([first.value, second.value], [{ loaded: 1 }, { loaded: 2 }]);
+    assert.equal(first.cache, undefined, "a disabled cache says nothing about how the answer was served");
+    assert.equal(cache.entry("table", "main.s.t"), undefined);
+    assert.deepEqual(cache.stats(), { total: zeroCounters, byKind: { table: zeroCounters, listing: zeroCounters } });
+    assert.equal(
+      await stat(path).then(
+        () => true,
+        () => false,
+      ),
+      false,
+      "no cache.db",
+    );
+  });
+});
+
+test("a metadata service on a disabled cache loads every time and its answers carry no cache field", async () => {
+  await withCache(async ({ open }) => {
+    const { client, calls } = fakeClient({ ...cachedTableRoute(), ...listingRoutes() });
+    const metadata = createMetadataService(client, noStatements, await open({ ttlSeconds: 0 }));
+    const description = await metadata.describeTable("main.s.t");
+    await metadata.describeTable("main.s.t");
+    const listing = await metadata.listObjects({});
+    await metadata.listObjects({});
+    assert.equal("cache" in description, false);
+    assert.equal("cache" in listing, false);
+    assert.equal(calls.length, 4);
+  });
+});

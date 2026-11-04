@@ -5,7 +5,7 @@ import type { ExecutionScope } from "./execution-scope.ts";
 import { describeArguments } from "./logging/arguments.ts";
 import type { LogRepository } from "./logging/repository.ts";
 import type { LogService } from "./logging/service.ts";
-import type { CacheKind } from "./metadata-cache.ts";
+import type { CacheKind, MetadataCache } from "./metadata-cache.ts";
 import { DAY_MS } from "./time.ts";
 import type { Workspace } from "./workspace-session.ts";
 
@@ -230,29 +230,30 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
     enabled: false,
     message: "The metadata cache is disabled (DAK_CACHE_TTL=0).",
   };
-  /** One cache entry of the current identity; `key` is the table name or the level path (empty for the catalogs). */
-  const cacheEntry = async (kind: CacheKind, key: string) => {
+  /** Answer of a cache resource: what `read` makes of the cache of the current identity, or that the cache is disabled. */
+  const cacheAnswer = async (read: (cache: MetadataCache) => object) => {
     const { cache } = await workspace();
-    if (cache === undefined) return CACHE_DISABLED;
-    const entry = cache.entry(kind, key);
-    if (entry === undefined) {
-      const what = key === "" ? "the catalogs" : `'${key}'`;
-      throw new DakError(
-        "NOT_FOUND",
-        `No cache entry for ${kind} ${what}: it was never looked up with this identity, or it was purged.`,
-      );
-    }
-    return { enabled: true, kind, key, ...entry };
+    return cache.enabled ? { enabled: true, ...read(cache) } : CACHE_DISABLED;
   };
+  /** One cache entry of the current identity; `key` is the table name or the level path (empty for the catalogs). */
+  const cacheEntry = (kind: CacheKind, key: string) =>
+    cacheAnswer((cache) => {
+      const entry = cache.entry(kind, key);
+      if (entry === undefined) {
+        const what = key === "" ? "the catalogs" : `'${key}'`;
+        throw new DakError(
+          "NOT_FOUND",
+          `No cache entry for ${kind} ${what}: it was never looked up with this identity, or it was purged.`,
+        );
+      }
+      return { kind, key, ...entry };
+    });
   resource(
     "cache-stats",
     "resource://cache/stats",
     "Efficiency of the metadata cache for this identity: hits, misses, reloads, hit ratio and time saved, by kind.",
     true,
-    async () => {
-      const { cache } = await workspace();
-      return cache === undefined ? CACHE_DISABLED : { enabled: true, ...cache.stats() };
-    },
+    () => cacheAnswer((cache) => cache.stats()),
   );
   resource(
     "cache-entry-table",

@@ -74,17 +74,20 @@ export interface MetadataCacheOptions {
 
 /** Persistent cache of Databricks metadata answers (ADR 0021). */
 export interface MetadataCache {
+  /** False for the cache of a server that has none (`DAK_CACHE_TTL=0`, ADR 0024): it stores nothing and the cache resources say so. */
+  readonly enabled: boolean;
   /**
    * Serves the entry of `kind` and `key` (case-insensitive) when it is fresh and `refresh` is not set; otherwise runs
    * `load`, stores its value and serves it. A failed `load` stores nothing and rejects, so an error is never cached and
    * an old value is never served in its place. When the cache itself fails, the value is loaded and served as `bypassed`.
+   * A disabled cache always loads and gives no `cache` info: its answers say nothing about how they were served.
    */
   lookup<T>(
     kind: CacheKind,
     key: string,
     load: () => Promise<T>,
     options?: { refresh?: boolean | undefined },
-  ): Promise<{ value: T; cache: CacheInfo }>;
+  ): Promise<{ value: T; cache?: CacheInfo }>;
   /** Counters and dates of one entry of this identity, or undefined when it is not cached. */
   entry(kind: CacheKind, key: string): CacheEntryInfo | undefined;
   /** Totals over the live entries of this identity, overall and by kind. Reading them changes no counter. */
@@ -135,6 +138,20 @@ const emptyCounters = (): CacheCounters => ({
   oldestLoadedAt: null,
 });
 
+const emptyStats = (): CacheStats => ({
+  total: emptyCounters(),
+  byKind: { table: emptyCounters(), listing: emptyCounters() },
+});
+
+/** The cache of a server that has none: it loads every time, stores nothing and creates no file (ADR 0024). */
+export const disabledMetadataCache: MetadataCache = {
+  enabled: false,
+  lookup: async (_kind, _key, load) => ({ value: await load() }),
+  entry: () => undefined,
+  stats: emptyStats,
+  close: () => undefined,
+};
+
 /** Fills the hit ratio of `counters` from their hits, misses and expirations. */
 function withHitRatio(counters: CacheCounters): CacheCounters {
   const lookups = counters.hits + counters.misses + counters.expirations;
@@ -160,12 +177,14 @@ async function openDatabase(path: string) {
 }
 
 /**
- * Opens (creating it if needed) the cache database, in WAL mode and readable only by its owner outside Windows. A file
+ * With a TTL of 0 it opens nothing and gives {@link disabledMetadataCache}. Otherwise it opens (creating it if needed)
+ * the cache database, in WAL mode and readable only by its owner outside Windows. A file
  * that cannot be used, such as a corrupt one or one of another schema version, is deleted and created again once; if the
  * cache still cannot be opened, every lookup answers from Databricks as `bypassed`. Entries unused for 30 days are
  * purged when the cache opens and every 24 hours by a timer that does not keep the process alive.
  */
 export async function openMetadataCache(options: MetadataCacheOptions): Promise<MetadataCache> {
+  if (options.ttlSeconds === 0) return disabledMetadataCache;
   const { identity } = options;
   const now = options.now ?? Date.now;
   const ttlMs = options.ttlSeconds * 1000;
@@ -188,9 +207,10 @@ export async function openMetadataCache(options: MetadataCacheOptions): Promise<
   } catch (error) {
     warn("Metadata cache cannot be opened; answering from Databricks", { path: options.path }, error);
     return {
+      enabled: true,
       lookup: async (_kind, _key, load) => bypassed(await load()),
       entry: () => undefined,
-      stats: () => ({ total: emptyCounters(), byKind: { table: emptyCounters(), listing: emptyCounters() } }),
+      stats: emptyStats,
       close: () => undefined,
     };
   }
@@ -237,6 +257,7 @@ export async function openMetadataCache(options: MetadataCacheOptions): Promise<
   purgeTimer.unref();
 
   return {
+    enabled: true,
     async lookup<T>(
       kind: CacheKind,
       key: string,
