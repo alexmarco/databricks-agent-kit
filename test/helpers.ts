@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createAgentStatements } from "../src/agent-statements.ts";
 import { createExecutionScope } from "../src/execution-scope.ts";
 import type { ExportManager } from "../src/export/manager.ts";
 import type { ExportFormat, ExportState } from "../src/export/types.ts";
@@ -125,7 +126,8 @@ export function fakeServices(logs: LogService, options: { cache?: boolean } = {}
             ? FAKE_CACHE_ENTRY
             : undefined,
       }) as unknown as MetadataCache | undefined;
-  const workspace = async () => ({ warehouses, statements, metadata, exports, cache });
+  const agentStatements = createAgentStatements({ statements, exports });
+  const workspace = async () => ({ warehouses, metadata, cache, agentStatements });
   return {
     workspace,
     warehouses,

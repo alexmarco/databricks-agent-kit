@@ -16,10 +16,10 @@ Possible statuses: Proposed, Accepted, Superseded.
 | [0008](0008-simplified-read-only-check.md)                   | Simplified read-only check                                                     | Accepted                            |
 | [0009](0009-statement-lifecycle-module.md)                   | Statement lifecycle module                                                     | Accepted                            |
 | [0010](0010-exports-on-the-statement-lifecycle.md)           | Exports on the statement lifecycle module                                      | Accepted                            |
-| [0011](0011-statement-lookup-for-get-statement.md)           | Statement lookup for `get_statement`                                           | Accepted                            |
+| [0011](0011-statement-lookup-for-get-statement.md)           | Statement lookup for `get_statement`                                           | Accepted, partly superseded by 0023 |
 | [0012](0012-warehouse-selection-module.md)                   | Warehouse selection module                                                     | Accepted                            |
 | [0013](0013-execution-scope-module.md)                       | Execution scope module                                                         | Accepted                            |
-| [0014](0014-workspace-session-module.md)                     | Workspace session module                                                       | Accepted                            |
+| [0014](0014-workspace-session-module.md)                     | Workspace session module                                                       | Accepted, partly superseded by 0023 |
 | [0015](0015-review-fixes-for-the-deepened-modules.md)        | Review fixes for the deepened modules                                          | Accepted                            |
 | [0016](0016-ci-cd-pipeline-and-gitflow.md)                   | CI/CD pipeline, simplified GitFlow and automated releases                      | Accepted, partly superseded by 0022 |
 | [0017](0017-documentation-site-on-github-pages.md)           | Documentation site on GitHub Pages with VitePress                              | Accepted                            |
@@ -28,5 +28,6 @@ Possible statuses: Proposed, Accepted, Superseded.
 | [0020](0020-dependabot-reads-its-configuration-from-main.md) | Dependabot reads its configuration from main                                   | Accepted                            |
 | [0021](0021-metadata-cache.md)                               | Metadata cache and a REST-only `describe_table`                                | Accepted                            |
 | [0022](0022-releases-with-release-please.md)                 | Releases with Release Please, squash merges into develop and an install script | Accepted                            |
+| [0023](0023-agent-statements-module.md)                      | Agent statements module for `execute_sql` and `get_statement`                  | Accepted                            |
 
 Current design: [docs/design.md](../design.md).

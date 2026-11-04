@@ -221,6 +221,27 @@ test("the workspace limits reach the statement lifecycle", async () => {
   });
 });
 
+test("the workspace gives the agent's statements, built once on the session's lifecycle and export manager", async () => {
+  await withLogs("stdio", async ({ logs, dir }) => {
+    const { adapters: fake } = adapters();
+    const session = createWorkspaceSession(fake, sessionOptions(dir, logs));
+    const { agentStatements } = await session.workspace();
+    assert.equal((await session.workspace()).agentStatements, agentStatements);
+
+    const inline = await agentStatements.execute({ statement: "SHOW TABLES" });
+    assert.equal(inline.state, "SUCCEEDED");
+    const started = await agentStatements.execute({ statement: "SELECT 1", export: { format: "csv", name: "out" } });
+    assert.equal(started.statementId, "st-export");
+    const status = await agentStatements.get("st-export", {});
+    assert.ok(
+      "export" in status && status.export.statementId === "st-export",
+      "the export manager of the session answers",
+    );
+    await assert.rejects(agentStatements.execute({ statement: "SELECT 1; DROP TABLE t" }), ReadOnlyViolationError);
+    await session.close();
+  });
+});
+
 test("the configured warehouse wins over the profile's, which wins over the automatic choice", async () => {
   await withLogs("stdio", async ({ logs, dir }) => {
     const profile = adapters(undefined, 0, { ...auth, profileWarehouseId: "wh-profile" });
