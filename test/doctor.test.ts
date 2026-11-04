@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   ensureWritableDirectory,
   formatReport,
+  meetsMinimumVersion,
   runDoctor,
   type DoctorConnection,
   type DoctorDependencies,
@@ -499,6 +500,26 @@ test("ensureWritableDirectory creates the directory with mode 0700", {
     await ensureWritableDirectory(target);
     assert.equal((await stat(target)).mode & 0o777, 0o700);
   });
+});
+
+test("meetsMinimumVersion accepts an equal or newer version in any position", () => {
+  const minimum = [1, 2, 3] as const;
+  for (const output of ["1.2.3", "Databricks CLI v1.2.3\n", "1.2.4", "1.3.0", "2.0.0", "1.10.0", "10.0.0"]) {
+    assert.equal(meetsMinimumVersion(output, minimum), true, output);
+  }
+});
+
+test("meetsMinimumVersion rejects an older version in any position", () => {
+  const minimum = [1, 2, 3] as const;
+  for (const output of ["1.2.2", "1.1.9", "0.9.9", "Databricks CLI v0.287.0", "1.2.0"]) {
+    assert.equal(meetsMinimumVersion(output, minimum), false, output);
+  }
+});
+
+test("meetsMinimumVersion rejects output that holds no version", () => {
+  assert.equal(meetsMinimumVersion("", [1, 0, 0]), false);
+  assert.equal(meetsMinimumVersion("garbage", [1, 0, 0]), false);
+  assert.equal(meetsMinimumVersion("v1.2", [1, 0, 0]), false);
 });
 
 test("formatReport prints one line per check and a summary", async () => {
