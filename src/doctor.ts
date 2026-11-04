@@ -2,7 +2,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { FetchLike } from "./auth.ts";
 import type { Settings } from "./config.ts";
-import { messageWithoutUrls } from "./errors.ts";
+import { messageOf, messageWithoutUrls } from "./errors.ts";
 import type { StatementLifecycle } from "./statements.ts";
 import type { WarehouseSelection } from "./warehouses.ts";
 import type { WorkspaceConnection, WorkspaceLimits } from "./workspace-session.ts";
@@ -53,8 +53,6 @@ const REMOTE_CHECKS = ["Identity", "SQL warehouse", "SQL execution", "informatio
 const MIN_CLI = [1, 0, 0] as const;
 const DOWNLOAD_WAIT_BUDGET_MS = 60_000;
 const DOWNLOAD_TIMEOUT_MS = 15_000;
-
-const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /**
  * Creates the export directory (owner-only, like the export manager) if needed and proves it is writable by writing and
