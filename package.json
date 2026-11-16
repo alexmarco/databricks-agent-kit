@@ -30,12 +30,12 @@
   "dependencies": {
     "@modelcontextprotocol/node": "^2.1.2",
     "@modelcontextprotocol/server": "^2.3.1",
-    "commander": "^15.0.0",
+    "commander": "^15.1.0",
     "parquet-wasm": "0.9.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.4",
+    "@biomejs/biome": "2.6.7",
     "@commitlint/cli": "21.2.4",
     "@commitlint/config-conventional": "21.2.4",
     "@excalidraw/utils": "0.1.8",
